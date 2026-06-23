@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, RefreshControl } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
-import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
 interface Goal {
@@ -15,6 +16,7 @@ interface Goal {
 
 export default function GoalsScreen() {
   const { user } = useAuth();
+  const { colors } = useTheme();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'today' | 'week' | 'all'>('today');
@@ -43,35 +45,41 @@ export default function GoalsScreen() {
 
   return (
     <ScrollView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.scrollContent}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await loadGoals(); setRefreshing(false); }} tintColor={Colors.text} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await loadGoals(); setRefreshing(false); }} tintColor={colors.text} />}
     >
-      <Text style={styles.title}>Goals</Text>
+      <Text style={[styles.title, { color: colors.text }]}>Goals</Text>
 
       <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{completedCount}</Text>
-          <Text style={styles.statLabel}>Completed</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{goals.length}</Text>
-          <Text style={styles.statLabel}>Total</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={[styles.statNumber, completionRate >= 70 && styles.statNumberGood]}>{completionRate}%</Text>
-          <Text style={styles.statLabel}>Rate</Text>
-        </View>
+        {[
+          { label: 'Completed', value: completedCount },
+          { label: 'Total', value: goals.length },
+          { label: 'Rate', value: `${completionRate}%`, good: completionRate >= 70 },
+        ].map((s, i) => (
+          <View key={i} style={[styles.statCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+            <Text style={[styles.statNumber, { color: (s as any).good ? colors.success : colors.text }]}>{s.value}</Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{s.label}</Text>
+          </View>
+        ))}
       </View>
 
       <View style={styles.filterRow}>
         {(['today', 'week', 'all'] as const).map((f) => (
           <Pressable
             key={f}
-            style={[styles.filterChip, filter === f && styles.filterChipActive]}
+            style={[
+              styles.filterChip,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+              filter === f && { backgroundColor: colors.primary, borderColor: colors.primary },
+            ]}
             onPress={() => setFilter(f)}
           >
-            <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>
+            <Text style={[
+              styles.filterText,
+              { color: colors.textSecondary },
+              filter === f && { color: colors.textInverse },
+            ]}>
               {f === 'today' ? 'Today' : f === 'week' ? 'This Week' : 'All Time'}
             </Text>
           </Pressable>
@@ -80,24 +88,36 @@ export default function GoalsScreen() {
 
       {goals.length === 0 ? (
         <View style={styles.emptyState}>
-          <Feather name="target" size={36} color={Colors.textTertiary} />
-          <Text style={styles.emptyTitle}>No goals yet</Text>
-          <Text style={styles.emptySubtitle}>Goals generate daily on the Today tab.</Text>
+          <Feather name="target" size={36} color={colors.textTertiary} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>No goals yet</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>Goals generate daily on the Today tab.</Text>
         </View>
       ) : (
         <View style={styles.goalsList}>
           {goals.map((goal) => (
             <Pressable
               key={goal.id}
-              style={[styles.goalCard, goal.completed && styles.goalCardDone]}
+              style={[
+                styles.goalCard,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+                goal.completed && { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight },
+              ]}
               onPress={() => toggleGoal(goal.id, !goal.completed)}
             >
-              <View style={[styles.checkbox, goal.completed && styles.checkboxDone]}>
-                {goal.completed && <Feather name="check" size={12} color={Colors.textInverse} />}
+              <View style={[
+                styles.checkbox,
+                { borderColor: colors.border },
+                goal.completed && { backgroundColor: colors.primary, borderColor: colors.primary },
+              ]}>
+                {goal.completed && <Feather name="check" size={12} color={colors.textInverse} />}
               </View>
               <View style={styles.goalContent}>
-                <Text style={[styles.goalTitle, goal.completed && styles.goalTitleDone]}>{goal.title}</Text>
-                <Text style={styles.goalMeta}>{goal.goal_date}</Text>
+                <Text style={[
+                  styles.goalTitle,
+                  { color: colors.text },
+                  goal.completed && { textDecorationLine: 'line-through', color: colors.textTertiary },
+                ]}>{goal.title}</Text>
+                <Text style={[styles.goalMeta, { color: colors.textTertiary }]}>{goal.goal_date}</Text>
               </View>
             </Pressable>
           ))}
@@ -108,43 +128,34 @@ export default function GoalsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  container: { flex: 1 },
   scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: 64, paddingBottom: 100 },
-  title: { fontFamily: 'Inter-Bold', fontSize: FontSize.xxl, color: Colors.text, marginBottom: Spacing.lg },
+  title: { fontFamily: 'Inter-Bold', fontSize: FontSize.xxl, marginBottom: Spacing.lg },
   statsRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.lg },
   statCard: {
-    flex: 1, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.borderLight,
-    borderRadius: BorderRadius.md, padding: Spacing.md, alignItems: 'center',
+    flex: 1, borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md, alignItems: 'center',
   },
-  statNumber: { fontFamily: 'Inter-Bold', fontSize: FontSize.xl, color: Colors.text },
-  statNumberGood: { color: Colors.success },
-  statLabel: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+  statNumber: { fontFamily: 'Inter-Bold', fontSize: FontSize.xl },
+  statLabel: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 2 },
   filterRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.lg },
   filterChip: {
     paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md,
-    borderRadius: BorderRadius.full, backgroundColor: Colors.surface,
-    borderWidth: 1, borderColor: Colors.border,
+    borderRadius: BorderRadius.full, borderWidth: 1,
   },
-  filterChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  filterText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, color: Colors.textSecondary },
-  filterTextActive: { color: Colors.textInverse },
+  filterText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
   goalsList: { gap: Spacing.sm },
   goalCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.surface, padding: Spacing.md,
-    borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border,
+    padding: Spacing.md, borderRadius: BorderRadius.md, borderWidth: 1,
   },
-  goalCardDone: { backgroundColor: Colors.surfaceElevated, borderColor: Colors.borderLight },
   checkbox: {
-    width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: Colors.border,
+    width: 22, height: 22, borderRadius: 11, borderWidth: 1.5,
     justifyContent: 'center', alignItems: 'center', marginTop: 2,
   },
-  checkboxDone: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   goalContent: { flex: 1 },
-  goalTitle: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, color: Colors.text, lineHeight: 22 },
-  goalTitleDone: { textDecorationLine: 'line-through', color: Colors.textTertiary },
-  goalMeta: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, marginTop: 4 },
+  goalTitle: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, lineHeight: 22 },
+  goalMeta: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 4 },
   emptyState: { alignItems: 'center', paddingVertical: Spacing.xxl, gap: Spacing.sm },
-  emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.text, marginTop: Spacing.sm },
-  emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, marginTop: Spacing.sm },
+  emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center' },
 });

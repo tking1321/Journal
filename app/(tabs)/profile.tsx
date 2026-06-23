@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, Switch } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
@@ -16,7 +16,7 @@ interface Category {
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, profile, signOut } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark, toggleTheme } = useTheme();
   const [categories, setCategories] = useState<Category[]>([]);
   const [newCategory, setNewCategory] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export default function ProfileScreen() {
       await signOut();
     } finally {
       setSigningOut(false);
-      router.replace('/');
+      router.replace('/auth');
     }
   }
 
@@ -181,6 +181,18 @@ export default function ProfileScreen() {
               <Text style={[styles.settingValue, { color: colors.textSecondary }]}>{s.value || 'Not set'}</Text>
             </View>
           ))}
+          <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: colors.borderLight }]}>
+            <View style={styles.settingLeft}>
+              <Feather name="moon" size={15} color={colors.textSecondary} />
+              <Text style={[styles.settingLabel, { color: colors.text }]}>Dark Mode</Text>
+            </View>
+            <Switch
+              value={isDark}
+              onValueChange={toggleTheme}
+              trackColor={{ false: colors.borderLight, true: colors.primary }}
+              thumbColor={colors.surface}
+            />
+          </View>
         </View>
       </View>
 

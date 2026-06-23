@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Animated
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
+import { generateGoals, generateDailyInsight } from '@/lib/ai';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import CompletionRings from '@/components/CompletionRings';
@@ -275,77 +276,45 @@ export default function TodayScreen() {
   }
 
   async function generateGoalsWithAI(cats: Category[], entries: { content: string; entry_date: string }[], streakData: Streak | null) {
-    try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabase.auth.getSession();
+    const { data: previousGoals } = await supabase
+      .from('goals')
+      .select('title, completed, difficulty')
+      .order('created_at', { ascending: false })
+      .limit(12);
 
-      const { data: previousGoals } = await supabase
-        .from('goals')
-        .select('title, completed, difficulty')
-        .order('created_at', { ascending: false })
-        .limit(12);
+    const result = await generateGoals({
+      userId: user!.id,
+      categories: cats,
+      recentEntries: entries,
+      previousGoals: previousGoals || [],
+      streakData: streakData ? { current_streak: streakData.current_streak, longest_streak: streakData.longest_streak } : null,
+      profile: {
+        coaching_style: profile?.coaching_style,
+        journaling_style: profile?.journaling_style,
+        biggest_obstacle: profile?.biggest_obstacle,
+        success_vision: profile?.success_vision,
+        user_level: profile?.user_level,
+        total_xp_earned: profile?.total_xp_earned,
+        daily_goal_limit: profile?.daily_goal_limit,
+      },
+      today,
+    });
 
-      const { data: weeklyEntries } = await supabase
-        .from('journal_entries')
-        .select('content, entry_date')
-        .gte('entry_date', new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0])
-        .order('entry_date', { ascending: false });
-
-      let weeklySummary = '';
-      if (weeklyEntries && weeklyEntries.length >= 3) {
-        weeklySummary = weeklyEntries.slice(0, 3).map(e => e.content.slice(0, 100)).join(' | ');
-      }
-
-      const res = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token || supabaseKey}`,
-          Apikey: supabaseKey,
-        },
-        body: JSON.stringify({
-          type: 'goals',
-          categories: cats,
-          recentEntries: entries,
-          profile: {
-            coaching_style: profile?.coaching_style,
-            journaling_style: profile?.journaling_style,
-            biggest_obstacle: profile?.biggest_obstacle,
-            success_vision: profile?.success_vision,
-            user_level: profile?.user_level,
-            total_xp_earned: profile?.total_xp_earned,
-            daily_goal_limit: profile?.daily_goal_limit,
-          },
-          previousGoals: previousGoals || [],
-          streakData: streakData ? { current_streak: streakData.current_streak, longest_streak: streakData.longest_streak } : null,
-          weeklySummary,
-          dailyGoalLimit: profile?.daily_goal_limit || 3,
-        }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        const aiGoals: Array<{ title?: string; text?: string; description?: string; categoryName?: string; difficulty: string; xp: number }> = json.goals || [];
-        if (aiGoals.length > 0) {
-          const inserts = aiGoals.map((g) => ({
-            title: g.title || g.text || 'Daily goal',
-            description: g.description || '',
-            goal_date: today,
-            category_id: cats.find((c) => c.name === g.categoryName)?.id || null,
-            difficulty: g.difficulty || 'easy',
-            xp_value: g.xp || 5,
-          }));
-          const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
-          setGoals(newGoals || []);
-          if (json.reflection) setAiInsight(json.reflection);
-          if (json.next_focus) setAiNextFocus(json.next_focus);
-
-          await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user!.id);
-          return;
-        }
-      }
-    } catch (_) {}
+    if (result && result.goals.length > 0) {
+      const inserts = result.goals.map((g) => ({
+        title: g.title || g.text || 'Daily goal',
+        description: g.description || '',
+        goal_date: today,
+        category_id: cats.find((c) => c.name === g.categoryName)?.id || null,
+        difficulty: g.difficulty || 'easy',
+        xp_value: g.xp || 5,
+      }));
+      const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
+      setGoals(newGoals || []);
+      if (result.reflection) setAiInsight(result.reflection);
+      if (result.next_focus) setAiNextFocus(result.next_focus);
+      return;
+    }
 
     // Fallback: generate simple goals without AI
     const fallbackGoals = cats.slice(0, profile?.daily_goal_limit || 3).map((cat, i) => ({
@@ -362,31 +331,20 @@ export default function TodayScreen() {
   }
 
   async function fetchDailyInsight(entries: { content: string }[]) {
-    try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-      const { data: { session } } = await supabase.auth.getSession();
+    const result = await generateDailyInsight({
+      userId: user!.id,
+      recentEntries: entries,
+      profile: {
+        coaching_style: profile?.coaching_style,
+        success_vision: profile?.success_vision,
+      },
+      today,
+    });
 
-      const res = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token || supabaseKey}`,
-          Apikey: supabaseKey,
-        },
-        body: JSON.stringify({
-          type: 'reflection',
-          recentEntries: entries,
-          profile: { coaching_style: profile?.coaching_style, success_vision: profile?.success_vision },
-        }),
-      });
+    if (result?.reflection) setAiInsight(result.reflection);
+    if (result?.next_focus) setAiNextFocus(result.next_focus);
 
-      if (res.ok) {
-        const json = await res.json();
-        if (json.reflection) setAiInsight(json.reflection);
-        if (json.next_focus) setAiNextFocus(json.next_focus);
-      }
-    } catch (_) {
+    if (!result) {
       const fallback: Record<string, string[]> = {
         'strict coach': ['Show up. No excuses today.', 'Discipline beats motivation every time.'],
         'gentle coach': ["You're building something real.", 'Every small step compounds.'],

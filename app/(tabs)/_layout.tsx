@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
 import { Tabs, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import { Colors } from '@/lib/constants';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function TabLayout() {
   const { profile, loading } = useAuth();
+  const { colors } = useTheme();
   const router = useRouter();
 
   useEffect(() => {
@@ -27,11 +28,11 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.textTertiary,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textTertiary,
         tabBarStyle: {
-          backgroundColor: Colors.surface,
-          borderTopColor: Colors.borderLight,
+          backgroundColor: colors.surface,
+          borderTopColor: colors.borderLight,
           borderTopWidth: 1,
           paddingTop: 6,
           height: 84,

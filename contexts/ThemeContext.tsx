@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Appearance, ColorSchemeName } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LightColors, DarkColors, ColorScheme } from '@/lib/constants';
+
+const THEME_KEY = 'app_theme_preference';
 
 interface ThemeContextType {
   colors: ColorScheme;
@@ -15,20 +17,23 @@ const ThemeContext = createContext<ThemeContextType>({
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [scheme, setScheme] = useState<ColorSchemeName>(Appearance.getColorScheme());
+  // Default to light mode; load persisted preference on mount
+  const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
-    const sub = Appearance.addChangeListener(({ colorScheme }) => {
-      setScheme(colorScheme);
+    AsyncStorage.getItem(THEME_KEY).then((val) => {
+      if (val === 'dark') setIsDark(true);
     });
-    return () => sub.remove();
   }, []);
 
   function toggleTheme() {
-    setScheme((s) => (s === 'dark' ? 'light' : 'dark'));
+    setIsDark((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(THEME_KEY, next ? 'dark' : 'light');
+      return next;
+    });
   }
 
-  const isDark = scheme === 'dark';
   const colors = isDark ? DarkColors : LightColors;
 
   return (
