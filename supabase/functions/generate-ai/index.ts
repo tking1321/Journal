@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const MODEL = "gpt-5.4-mini";
+const MODEL = "gpt-4o-mini";
 const MAX_TOKENS = 900;
 
 const SYSTEM_PROMPT = `You are an AI coach for a self-improvement journaling app. Be concise, supportive, specific, and actionable. Return only the requested JSON with no extra text or markdown.`;
@@ -216,6 +216,30 @@ Return strict JSON:
 }`;
   }
 
+  if (type === "onboarding_plan") {
+    const categoryList = (categories || [])
+      .map((c) => `- ${c.name}: ${c.growth_description || "grow in this area"}`)
+      .join("\n");
+
+    return `${baseContext}
+
+Request type: onboarding_plan
+The user has just completed onboarding. Generate a personalized 30-day growth plan summary based on their specific answers.
+
+Growth areas they chose:
+${categoryList}
+
+Return strict JSON:
+{
+  "title": "Your 30-Day Journey",
+  "summary": "2-3 sentence personalized plan overview tied to their specific categories and biggest obstacle",
+  "goals": [],
+  "reflection": "One powerful motivating sentence personalized to their coaching style and 30-day vision",
+  "next_focus": "The single most important thing to focus on in week one",
+  "insight": ""
+}`;
+  }
+
   return `Return JSON: { "title": "", "summary": "Unknown request type", "goals": [], "reflection": "", "next_focus": "", "insight": "" }`;
 }
 
@@ -247,11 +271,10 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json();
-    const { type, categories, recentEntries, profile, previousGoals, streakData, weeklySummary, dailyGoalLimit, content, entries, goalsCompleted, totalGoals } = body;
+    const { type, categories, recentEntries, profile, previousGoals, streakData, dailyGoalLimit, content, entries, goalsCompleted, totalGoals } = body;
 
     const today = new Date().toISOString().split("T")[0];
 
-    // Anti-loop guard
     if (userId) {
       const { data: prof } = await supabase
         .from("profiles")
@@ -260,11 +283,13 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       if (prof) {
-        // Return cached result for goals if already generated today
+        // Return cached result for goals only if the cached response has actual content
         if (
           prof.last_ai_request_date === today &&
           prof.last_ai_request_type === type &&
           prof.last_ai_response_json &&
+          Array.isArray((prof.last_ai_response_json as Record<string, unknown>).goals) &&
+          ((prof.last_ai_response_json as Record<string, unknown>).goals as unknown[]).length > 0 &&
           (type === "daily_goals" || type === "goals")
         ) {
           return new Response(JSON.stringify(prof.last_ai_response_json), {
@@ -323,42 +348,45 @@ Deno.serve(async (req: Request) => {
 
       const data = await response.json();
       result = JSON.parse(data.choices[0].message.content);
-    } finally {
+
+      // Normalize goals field: support both "goals[].text" and "goals[].title" from AI
+      if (Array.isArray(result.goals)) {
+        result.goals = (result.goals as Array<Record<string, unknown>>).map((g) => ({
+          ...g,
+          title: g.title || g.text || "",
+          text: g.text || g.title || "",
+        }));
+      }
+
+      // Only persist successful responses
       if (userId) {
+        const currentCount = await supabase
+          .from("profiles")
+          .select("ai_generation_count_today")
+          .eq("id", userId)
+          .maybeSingle();
+
         await supabase.from("profiles").update({
           ai_request_lock: false,
           last_ai_request_type: type,
           last_ai_request_date: today,
           last_ai_response_json: result,
           last_ai_response_at: new Date().toISOString(),
-          ai_generation_count_today: supabase.rpc ? undefined : 0,
-        }).eq("id", userId);
-
-        await supabase.from("profiles").update({
-          ai_generation_count_today: (await supabase
-            .from("profiles")
-            .select("ai_generation_count_today")
-            .eq("id", userId)
-            .maybeSingle()
-          ).data?.ai_generation_count_today + 1 || 1
+          ai_generation_count_today: (currentCount.data?.ai_generation_count_today || 0) + 1,
         }).eq("id", userId);
       }
-    }
-
-    // Normalize goals field: support both "goals[].text" and "goals[].title" from AI
-    if (Array.isArray(result.goals)) {
-      result.goals = (result.goals as Array<Record<string, unknown>>).map((g) => ({
-        ...g,
-        title: g.title || g.text || "",
-        text: g.text || g.title || "",
-      }));
+    } catch (innerErr) {
+      // Release lock without caching the failed result
+      if (userId) {
+        await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
+      }
+      throw innerErr;
     }
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
-    // Release lock on error
     if (userId) {
       await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
     }
