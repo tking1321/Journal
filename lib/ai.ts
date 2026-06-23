@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-const MODEL = 'gpt-4o-mini';
+const MODEL = 'gpt-4.5-mini';
 const MAX_TOKENS = 900;
 
 const SYSTEM_PROMPT =
