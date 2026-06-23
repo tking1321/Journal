@@ -1,0 +1,758 @@
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Animated } from 'react-native';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { Feather } from '@expo/vector-icons';
+import CompletionRings from '@/components/CompletionRings';
+
+interface Goal {
+  id: string;
+  title: string;
+  description: string;
+  completed: boolean;
+  goal_date: string;
+  difficulty: string;
+  xp_value: number;
+}
+
+interface Category {
+  id: string;
+  name: string;
+  growth_description: string | null;
+}
+
+interface Streak {
+  current_streak: number;
+  longest_streak: number;
+  last_active_date: string | null;
+  streak_goal: number;
+  freeze_uses_remaining: number;
+  freeze_month: string | null;
+}
+
+interface DailyRing {
+  id?: string;
+  journal_done: boolean;
+  goals_done: boolean;
+  reflection_done: boolean;
+  day_complete: boolean;
+}
+
+interface Achievement {
+  key: string;
+  label: string;
+  unlocked_at: string;
+}
+
+const LEVEL_THRESHOLDS = [0, 20, 40, 65, 95, 130, 170];
+
+function getThresholdForLevel(level: number): number {
+  if (level <= LEVEL_THRESHOLDS.length) return LEVEL_THRESHOLDS[level - 1];
+  const lastBase = LEVEL_THRESHOLDS[LEVEL_THRESHOLDS.length - 1];
+  const extra = level - LEVEL_THRESHOLDS.length;
+  let sum = lastBase;
+  for (let i = 0; i < extra; i++) {
+    sum += 40 + (LEVEL_THRESHOLDS.length + i) * 5;
+  }
+  return sum;
+}
+
+function getXpForNextLevel(level: number): number {
+  return getThresholdForLevel(level + 1) - getThresholdForLevel(level);
+}
+
+function getXpInCurrentLevel(totalXp: number, level: number): number {
+  return totalXp - getThresholdForLevel(level);
+}
+
+function calculateLevel(totalXp: number): number {
+  let lvl = 1;
+  while (getThresholdForLevel(lvl + 1) <= totalXp) {
+    lvl++;
+  }
+  return lvl;
+}
+
+const DIFFICULTY_COLORS: Record<string, string> = {
+  easy: '#1D6A3A',
+  medium: '#A0620A',
+  hard: '#C0392B',
+};
+
+const DIFFICULTY_BG: Record<string, string> = {
+  easy: '#EDF5F0',
+  medium: '#FFF4E6',
+  hard: '#FDE8E6',
+};
+
+export default function TodayScreen() {
+  const { user, profile, refreshProfile } = useAuth();
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [streak, setStreak] = useState<Streak | null>(null);
+  const [rings, setRings] = useState<DailyRing>({ journal_done: false, goals_done: false, reflection_done: false, day_complete: false });
+  const [aiReflection, setAiReflection] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [newAchievement, setNewAchievement] = useState<Achievement | null>(null);
+  const [xpGain, setXpGain] = useState<{ amount: number; visible: boolean }>({ amount: 0, visible: false });
+  const celebrationOpacity = useRef(new Animated.Value(0)).current;
+
+  const today = new Date().toISOString().split('T')[0];
+  const thisMonth = today.slice(0, 7);
+
+  const userLevel = profile?.user_level || 1;
+  const totalXp = profile?.total_xp_earned || 0;
+  const currentXpInLevel = getXpInCurrentLevel(totalXp, userLevel);
+  const xpNeeded = getXpForNextLevel(userLevel);
+
+  const loadData = useCallback(async () => {
+    if (!user) return;
+
+    const [goalsRes, catsRes, streakRes, entriesRes, ringsRes] = await Promise.all([
+      supabase.from('goals').select('*').eq('goal_date', today).order('created_at'),
+      supabase.from('categories').select('*'),
+      supabase.from('streaks').select('*').maybeSingle(),
+      supabase.from('journal_entries').select('content, entry_date').order('created_at', { ascending: false }).limit(5),
+      supabase.from('daily_rings').select('*').eq('ring_date', today).maybeSingle(),
+    ]);
+
+    const fetchedGoals = goalsRes.data || [];
+    const fetchedCats = catsRes.data || [];
+    const fetchedStreak = streakRes.data;
+    const entries = entriesRes.data || [];
+    const fetchedRings = ringsRes.data;
+
+    setCategories(fetchedCats);
+    setStreak(fetchedStreak);
+
+    if (fetchedRings) {
+      setRings(fetchedRings);
+    }
+
+    const hasJournalToday = entries.some((e) => e.entry_date === today);
+    if (hasJournalToday && fetchedRings && !fetchedRings.journal_done) {
+      await updateRing({ journal_done: true }, fetchedRings);
+    }
+
+    // Only generate if: no goals today AND categories exist AND not already generated today
+    const alreadyGeneratedToday = profile?.last_goal_generation_date === today;
+
+    if (fetchedGoals.length === 0 && fetchedCats.length > 0 && !alreadyGeneratedToday) {
+      setGenerating(true);
+      await generateGoalsWithAI(fetchedCats, entries, fetchedStreak);
+      setGenerating(false);
+    } else {
+      setGoals(fetchedGoals);
+      if (fetchedGoals.length > 0 && fetchedGoals.every((g) => g.completed)) {
+        if (fetchedRings && !fetchedRings.goals_done) {
+          await updateRing({ goals_done: true }, fetchedRings);
+        }
+      }
+    }
+
+    // Only fetch reflection once per day — reuse cached coaching message if available
+    const cachedReflection = profile?.last_ai_request_type === 'reflection' &&
+      profile?.last_ai_request_date === today &&
+      (profile?.last_ai_response_json as Record<string, unknown> | null)?.reflection as string | undefined;
+
+    if (cachedReflection) {
+      setAiReflection(cachedReflection);
+    } else {
+      await fetchReflection(entries);
+    }
+
+    setLoading(false);
+  }, [user, profile, today]);
+
+  async function upsertRing(updates: Partial<DailyRing>): Promise<DailyRing> {
+    const current = rings;
+    const merged = { ...current, ...updates };
+    const allDone = merged.journal_done && merged.goals_done && merged.reflection_done;
+    const wasDayComplete = current.day_complete;
+    const nowDayComplete = allDone;
+
+    merged.day_complete = nowDayComplete;
+
+    await supabase.from('daily_rings').upsert({
+      ring_date: today,
+      ...merged,
+    }, { onConflict: 'user_id,ring_date' });
+
+    setRings(merged);
+
+    if (nowDayComplete && !wasDayComplete) {
+      triggerCelebration();
+      await handleDayComplete();
+    }
+
+    return merged;
+  }
+
+  async function updateRing(updates: Partial<DailyRing>, base?: DailyRing) {
+    const current = base || rings;
+    const merged = { ...current, ...updates };
+    const allDone = merged.journal_done && merged.goals_done && merged.reflection_done;
+    merged.day_complete = allDone;
+
+    await supabase.from('daily_rings').upsert({
+      ring_date: today,
+      ...merged,
+    }, { onConflict: 'user_id,ring_date' });
+
+    setRings(merged);
+  }
+
+  function triggerCelebration() {
+    celebrationOpacity.setValue(0);
+    Animated.sequence([
+      Animated.timing(celebrationOpacity, { toValue: 1, duration: 350, useNativeDriver: true }),
+      Animated.delay(2200),
+      Animated.timing(celebrationOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
+    ]).start();
+  }
+
+  async function handleDayComplete() {
+    if (!user || !streak) return;
+
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const isConsecutive = streak.last_active_date === yesterday || streak.last_active_date === today;
+    const newCurrent = isConsecutive ? streak.current_streak + 1 : 1;
+    const newLongest = Math.max(newCurrent, streak.longest_streak);
+
+    await supabase.from('streaks').update({
+      current_streak: newCurrent,
+      longest_streak: newLongest,
+      last_active_date: today,
+    }).eq('user_id', user.id);
+
+    setStreak((prev) => prev ? { ...prev, current_streak: newCurrent, longest_streak: newLongest, last_active_date: today } : prev);
+
+    const { data: island } = await supabase.from('island_progress')
+      .select('buildings_count').eq('month_year', thisMonth).maybeSingle();
+
+    if (island) {
+      await supabase.from('island_progress').update({ buildings_count: island.buildings_count + 1 })
+        .eq('month_year', thisMonth);
+    } else {
+      await supabase.from('island_progress').insert({ month_year: thisMonth, buildings_count: 1 });
+    }
+
+    await checkAchievements(newCurrent, newLongest);
+  }
+
+  async function checkAchievements(currentStreak: number, longestStreak: number) {
+    if (!user) return;
+
+    const milestones: Array<{ key: string; label: string; threshold: number }> = [
+      { key: 'streak_7', label: 'First 7-day streak unlocked', threshold: 7 },
+      { key: 'streak_14', label: '14-day streak — momentum is real', threshold: 14 },
+      { key: 'streak_30', label: '30-day streak — exceptional consistency', threshold: 30 },
+    ];
+
+    for (const m of milestones) {
+      if (currentStreak === m.threshold || (longestStreak === m.threshold && currentStreak >= m.threshold)) {
+        const { data: existing } = await supabase.from('achievements')
+          .select('key').eq('key', m.key).maybeSingle();
+        if (!existing) {
+          await supabase.from('achievements').insert({ key: m.key, label: m.label });
+          setNewAchievement({ key: m.key, label: m.label, unlocked_at: new Date().toISOString() });
+          setTimeout(() => setNewAchievement(null), 4000);
+        }
+      }
+    }
+  }
+
+  async function generateGoalsWithAI(cats: Category[], entries: { content: string; entry_date: string }[], streakData: Streak | null) {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+      const { data: { session } } = await supabase.auth.getSession();
+
+      const { data: previousGoals } = await supabase
+        .from('goals')
+        .select('title, completed, difficulty')
+        .order('created_at', { ascending: false })
+        .limit(12);
+
+      const { data: weeklyEntries } = await supabase
+        .from('journal_entries')
+        .select('content, entry_date')
+        .gte('entry_date', new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0])
+        .order('entry_date', { ascending: false });
+
+      let weeklySummary = '';
+      if (weeklyEntries && weeklyEntries.length >= 3) {
+        weeklySummary = weeklyEntries.slice(0, 3).map(e => e.content.slice(0, 100)).join(' | ');
+      }
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token || supabaseKey}`,
+          Apikey: supabaseKey,
+        },
+        body: JSON.stringify({
+          type: 'goals',
+          categories: cats,
+          recentEntries: entries,
+          profile: {
+            coaching_style: profile?.coaching_style,
+            journaling_style: profile?.journaling_style,
+            biggest_obstacle: profile?.biggest_obstacle,
+            success_vision: profile?.success_vision,
+            user_level: profile?.user_level,
+            total_xp_earned: profile?.total_xp_earned,
+            daily_goal_limit: profile?.daily_goal_limit,
+          },
+          previousGoals: previousGoals || [],
+          streakData: streakData ? { current_streak: streakData.current_streak, longest_streak: streakData.longest_streak } : null,
+          weeklySummary,
+          dailyGoalLimit: profile?.daily_goal_limit || 3,
+        }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const aiGoals: Array<{ title?: string; text?: string; description?: string; categoryName?: string; difficulty: string; xp: number }> = json.goals || [];
+        if (aiGoals.length > 0) {
+          const inserts = aiGoals.map((g) => ({
+            title: g.title || g.text || 'Daily goal',
+            description: g.description || '',
+            goal_date: today,
+            category_id: cats.find((c) => c.name === g.categoryName)?.id || null,
+            difficulty: g.difficulty || 'easy',
+            xp_value: g.xp || 5,
+          }));
+          const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
+          setGoals(newGoals || []);
+          if (json.reflection) setAiReflection(json.reflection);
+
+          await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user!.id);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: generate simple goals without AI
+    const fallbackGoals = cats.slice(0, profile?.daily_goal_limit || 3).map((cat, i) => ({
+      title: `Focused time on: ${cat.name}`,
+      description: cat.growth_description || `Build your ${cat.name} practice today`,
+      goal_date: today,
+      category_id: cat.id,
+      difficulty: i === 0 ? 'hard' : i === 1 ? 'medium' : 'easy',
+      xp_value: i === 0 ? 20 : i === 1 ? 10 : 5,
+    }));
+    const { data: newGoals } = await supabase.from('goals').insert(fallbackGoals).select();
+    setGoals(newGoals || []);
+    await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user!.id);
+  }
+
+  async function fetchReflection(entries: { content: string }[]) {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+      const { data: { session } } = await supabase.auth.getSession();
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token || supabaseKey}`,
+          Apikey: supabaseKey,
+        },
+        body: JSON.stringify({
+          type: 'reflection',
+          recentEntries: entries,
+          profile: { coaching_style: profile?.coaching_style, success_vision: profile?.success_vision },
+        }),
+      });
+
+      if (res.ok) {
+        const { reflection } = await res.json();
+        if (reflection) setAiReflection(reflection);
+      }
+    } catch (_) {
+      const fallback: Record<string, string[]> = {
+        'strict coach': ['Show up. No excuses today.', 'Discipline beats motivation every time.'],
+        'gentle coach': ["You're building something real.", 'Every small step compounds.'],
+        'reflective prompts': ['What would your future self thank you for today?', 'What does progress look like right now?'],
+        'direct action': ['Pick one thing. Do it completely.', "Clarity comes from action, not thinking."],
+      };
+      const phrases = fallback[profile?.coaching_style || 'gentle coach'] || fallback['gentle coach'];
+      setAiReflection(phrases[Math.floor(Math.random() * phrases.length)]);
+    }
+  }
+
+  async function awardXp(xpAmount: number) {
+    if (!user || !profile) return;
+
+    const newTotal = (profile.total_xp_earned || 0) + xpAmount;
+    const newLevel = calculateLevel(newTotal);
+
+    await supabase.from('profiles').update({
+      current_xp: getXpInCurrentLevel(newTotal, newLevel),
+      total_xp_earned: newTotal,
+      user_level: newLevel,
+    }).eq('id', user.id);
+
+    setXpGain({ amount: xpAmount, visible: true });
+    setTimeout(() => setXpGain({ amount: 0, visible: false }), 2000);
+
+    await refreshProfile();
+  }
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  async function toggleGoal(goalId: string, completed: boolean) {
+    const goal = goals.find(g => g.id === goalId);
+    const updated = goals.map((g) => (g.id === goalId ? { ...g, completed } : g));
+    setGoals(updated);
+    await supabase.from('goals').update({ completed }).eq('id', goalId);
+
+    if (completed && goal) {
+      await awardXp(goal.xp_value);
+    } else if (!completed && goal) {
+      // Deduct XP if unchecking
+      const newTotal = Math.max(0, (profile?.total_xp_earned || 0) - goal.xp_value);
+      const newLevel = calculateLevel(newTotal);
+      await supabase.from('profiles').update({
+        current_xp: getXpInCurrentLevel(newTotal, newLevel),
+        total_xp_earned: newTotal,
+        user_level: newLevel,
+      }).eq('id', user!.id);
+      await refreshProfile();
+    }
+
+    const allDone = updated.every((g) => g.completed) && updated.length > 0;
+    if (allDone && !rings.goals_done) {
+      await upsertRing({ goals_done: true });
+    } else if (!allDone && rings.goals_done) {
+      await upsertRing({ goals_done: false });
+    }
+  }
+
+  async function markReflectionDone() {
+    if (rings.reflection_done) return;
+    await upsertRing({ reflection_done: true });
+  }
+
+  async function onRefresh() {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <Text style={styles.loadingText}>Preparing your day...</Text>
+      </View>
+    );
+  }
+
+  const completedCount = goals.filter((g) => g.completed).length;
+  const goalProgress = goals.length > 0 ? completedCount / goals.length : 0;
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const streakGoal = streak?.streak_goal || 7;
+  const dayOfMonth = new Date().getDate();
+  const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
+
+  return (
+    <View style={styles.outerContainer}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.text} />}
+      >
+        <Text style={styles.greeting}>{greeting}.</Text>
+        <Text style={styles.date}>
+          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+        </Text>
+
+        {/* Level & XP Card */}
+        <View style={styles.levelCard}>
+          <View style={styles.levelHeader}>
+            <View style={styles.levelBadge}>
+              <Text style={styles.levelBadgeText}>LVL {userLevel}</Text>
+            </View>
+            <Text style={styles.xpLabel}>
+              {currentXpInLevel} / {xpNeeded} XP to next level
+            </Text>
+          </View>
+          <View style={styles.xpBarTrack}>
+            <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any }]} />
+          </View>
+          <Text style={styles.totalXpText}>Total XP: {totalXp}</Text>
+        </View>
+
+        {/* Completion Rings */}
+        <View style={styles.ringsCard}>
+          <CompletionRings
+            journal={rings.journal_done}
+            goals={rings.goals_done}
+            goalProgress={goalProgress}
+            reflection={rings.reflection_done}
+          />
+          {rings.day_complete ? (
+            <View style={styles.dayCompleteRow}>
+              <Feather name="check-circle" size={14} color={Colors.success} />
+              <Text style={styles.dayCompleteText}>Day Complete</Text>
+            </View>
+          ) : (
+            <Text style={styles.ringsHint}>Complete all 3 rings to close your day</Text>
+          )}
+        </View>
+
+        {/* Streak bar */}
+        {streak && (
+          <View style={styles.streakBar}>
+            <Feather name="zap" size={14} color={Colors.accent} />
+            <Text style={styles.streakText}>
+              {streak.current_streak}/{streakGoal} days
+            </Text>
+            <View style={styles.streakTrack}>
+              <View style={[styles.streakFill, { width: `${Math.min(1, streak.current_streak / streakGoal) * 100}%` as any }]} />
+            </View>
+            <Text style={styles.streakBest}>Best: {streak.longest_streak}</Text>
+          </View>
+        )}
+
+        {/* AI coaching */}
+        {aiReflection ? (
+          <View style={styles.reflectionCard}>
+            <Text style={styles.reflectionLabel}>TODAY'S COACHING</Text>
+            <Text style={styles.reflectionText}>"{aiReflection}"</Text>
+            {!rings.reflection_done && (
+              <Pressable style={styles.reflectionDoneBtn} onPress={markReflectionDone}>
+                <Text style={styles.reflectionDoneBtnText}>Mark as read</Text>
+              </Pressable>
+            )}
+          </View>
+        ) : null}
+
+        {/* Goals */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Daily Goals</Text>
+          {goals.length > 0 && (
+            <Text style={styles.progressText}>{completedCount}/{goals.length} done</Text>
+          )}
+        </View>
+
+        {generating ? (
+          <View style={styles.generatingCard}>
+            <Feather name="cpu" size={20} color={Colors.textTertiary} />
+            <Text style={styles.generatingText}>AI is generating your goals...</Text>
+          </View>
+        ) : goals.length === 0 && categories.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Feather name="layers" size={32} color={Colors.textTertiary} />
+            <Text style={styles.emptyTitle}>No categories yet</Text>
+            <Text style={styles.emptySubtitle}>Add categories in the Profile tab to generate daily goals</Text>
+          </View>
+        ) : (
+          <View style={styles.goalsList}>
+            {goals.map((goal) => (
+              <Pressable
+                key={goal.id}
+                style={[styles.goalCard, goal.completed && styles.goalCardDone]}
+                onPress={() => toggleGoal(goal.id, !goal.completed)}
+              >
+                <View style={[styles.checkbox, goal.completed && styles.checkboxDone]}>
+                  {goal.completed && <Feather name="check" size={12} color={Colors.textInverse} />}
+                </View>
+                <View style={styles.goalContent}>
+                  <Text style={[styles.goalTitle, goal.completed && styles.goalTitleDone]}>
+                    {goal.title}
+                  </Text>
+                  {goal.description ? (
+                    <Text style={styles.goalDesc}>{goal.description}</Text>
+                  ) : null}
+                  <View style={styles.goalMeta}>
+                    <View style={[styles.difficultyBadge, { backgroundColor: DIFFICULTY_BG[goal.difficulty] || DIFFICULTY_BG.easy }]}>
+                      <Text style={[styles.difficultyText, { color: DIFFICULTY_COLORS[goal.difficulty] || DIFFICULTY_COLORS.easy }]}>
+                        {goal.difficulty}
+                      </Text>
+                    </View>
+                    <Text style={styles.xpValueText}>+{goal.xp_value} XP</Text>
+                  </View>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {/* Monthly chapter hint */}
+        <View style={styles.islandHint}>
+          <Feather name="map" size={13} color={Colors.textTertiary} />
+          <Text style={styles.islandHintText}>Day {dayOfMonth}/30 of this month's chapter</Text>
+        </View>
+      </ScrollView>
+
+      {/* XP gain toast */}
+      {xpGain.visible && (
+        <View style={styles.xpToast}>
+          <Feather name="trending-up" size={14} color={Colors.accent} />
+          <Text style={styles.xpToastText}>+{xpGain.amount} XP</Text>
+        </View>
+      )}
+
+      {/* Celebration overlay */}
+      {rings.day_complete && (
+        <Animated.View style={[styles.celebrationOverlay, { opacity: celebrationOpacity }]} pointerEvents="none">
+          <View style={styles.celebrationCard}>
+            <Feather name="check-circle" size={28} color={Colors.success} />
+            <Text style={styles.celebrationTitle}>Day Complete</Text>
+            <Text style={styles.celebrationSub}>All 3 rings closed. Your streak continues.</Text>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* Achievement toast */}
+      {newAchievement && (
+        <View style={styles.achievementToast}>
+          <Feather name="award" size={16} color={Colors.accent} />
+          <Text style={styles.achievementText}>{newAchievement.label}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  outerContainer: { flex: 1, backgroundColor: Colors.background },
+  container: { flex: 1 },
+  center: { justifyContent: 'center', alignItems: 'center' },
+  loadingText: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, color: Colors.textSecondary },
+  scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: 64, paddingBottom: 32 },
+  greeting: { fontFamily: 'Inter-Bold', fontSize: FontSize.xxl, color: Colors.text },
+  date: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, marginBottom: Spacing.lg },
+
+  levelCard: {
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent + '40',
+    borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md,
+  },
+  levelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm },
+  levelBadge: {
+    backgroundColor: Colors.primary, paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: 4, borderRadius: BorderRadius.sm,
+  },
+  levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: 12, color: Colors.textInverse, letterSpacing: 0.5 },
+  xpLabel: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, color: Colors.textSecondary },
+  xpBarTrack: {
+    height: 6, backgroundColor: Colors.borderLight, borderRadius: BorderRadius.full, overflow: 'hidden',
+  },
+  xpBarFill: { height: '100%', backgroundColor: Colors.accent, borderRadius: BorderRadius.full },
+  totalXpText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, marginTop: 6, textAlign: 'right' },
+
+  ringsCard: {
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.borderLight,
+    borderRadius: BorderRadius.lg, paddingHorizontal: Spacing.md, paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md, marginBottom: Spacing.md, alignItems: 'center',
+  },
+  dayCompleteRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginTop: 4 },
+  dayCompleteText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, color: Colors.success },
+  ringsHint: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, marginTop: 4 },
+
+  streakBar: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.borderLight,
+    borderRadius: BorderRadius.sm, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 2,
+    marginBottom: Spacing.md,
+  },
+  streakText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, color: Colors.text, minWidth: 52 },
+  streakTrack: {
+    flex: 1, height: 3, backgroundColor: Colors.borderLight,
+    borderRadius: BorderRadius.full, overflow: 'hidden',
+  },
+  streakFill: { height: '100%', backgroundColor: Colors.accent, borderRadius: BorderRadius.full },
+  streakBest: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
+
+  reflectionCard: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    padding: Spacing.md, marginBottom: Spacing.lg,
+  },
+  reflectionLabel: { fontFamily: 'Inter-Bold', fontSize: 9, color: 'rgba(255,255,255,0.5)', letterSpacing: 1, marginBottom: 6 },
+  reflectionText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, color: Colors.textInverse, lineHeight: 20, fontStyle: 'italic' },
+  reflectionDoneBtn: { marginTop: Spacing.sm, alignSelf: 'flex-start' },
+  reflectionDoneBtnText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, color: 'rgba(255,255,255,0.5)' },
+
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
+  sectionTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.text },
+  progressText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
+
+  goalsList: { gap: Spacing.sm },
+  goalCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    backgroundColor: Colors.surface, padding: Spacing.md,
+    borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border,
+  },
+  goalCardDone: { backgroundColor: Colors.surfaceElevated, borderColor: Colors.borderLight },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 1.5,
+    borderColor: Colors.border, justifyContent: 'center', alignItems: 'center', marginTop: 2,
+  },
+  checkboxDone: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  goalContent: { flex: 1 },
+  goalTitle: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, color: Colors.text, lineHeight: 22 },
+  goalTitleDone: { textDecorationLine: 'line-through', color: Colors.textTertiary },
+  goalDesc: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 4, lineHeight: 18 },
+  goalMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 8 },
+  difficultyBadge: {
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: BorderRadius.sm,
+  },
+  difficultyText: { fontFamily: 'Inter-SemiBold', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  xpValueText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.xs, color: Colors.accent },
+
+  generatingCard: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
+    borderRadius: BorderRadius.md, padding: Spacing.md,
+  },
+  generatingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary },
+
+  emptyState: { alignItems: 'center', paddingVertical: Spacing.xxl, gap: Spacing.sm },
+  emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.text },
+  emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+
+  islandHint: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    justifyContent: 'center', marginTop: Spacing.xl, paddingBottom: Spacing.md,
+  },
+  islandHintText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
+
+  xpToast: {
+    position: 'absolute', top: 80, right: Spacing.lg,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent + '60',
+    borderRadius: BorderRadius.full, paddingHorizontal: Spacing.md, paddingVertical: 6,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    shadowColor: Colors.accent, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 8,
+    elevation: 4,
+  },
+  xpToastText: { fontFamily: 'Inter-Bold', fontSize: FontSize.sm, color: Colors.accent },
+
+  celebrationOverlay: {
+    position: 'absolute', bottom: 100, left: Spacing.lg, right: Spacing.lg,
+    alignItems: 'center',
+  },
+  celebrationCard: {
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.success + '40',
+    borderRadius: BorderRadius.lg, padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm,
+    shadowColor: Colors.success, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
+    elevation: 8,
+  },
+  celebrationTitle: { fontFamily: 'Inter-Bold', fontSize: FontSize.lg, color: Colors.text },
+  celebrationSub: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+
+  achievementToast: {
+    position: 'absolute', bottom: 100, left: Spacing.lg, right: Spacing.lg,
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+  },
+  achievementText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, color: Colors.textInverse, flex: 1 },
+});
