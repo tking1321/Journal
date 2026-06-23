@@ -1,105 +1,96 @@
 import { View, Text, StyleSheet } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
-import { Colors, FontSize, Spacing } from '@/lib/constants';
-
-interface RingConfig {
-  progress: number; // 0–1
-  color: string;
-  label: string;
-  done: boolean;
-}
+import { useTheme } from '@/contexts/ThemeContext';
+import { FontSize, Spacing } from '@/lib/constants';
 
 interface CompletionRingsProps {
   journal: boolean;
   goals: boolean;
-  reflection: boolean;
-  goalProgress: number; // 0–1 for goals ring partial fill
+  goalProgress: number; // 0–1
+  // reflection prop kept for backward compat but unused
+  reflection?: boolean;
 }
 
-const RING_COLORS = {
-  journal: '#1D6A3A',    // green
-  goals: '#1A56A4',      // blue
-  reflection: '#6B3FA0', // purple
-};
+const RING_COLOR = '#1A56A4';
+const SIZE = 100;
+const STROKE = 8;
 
-const SIZE = 72;
-const STROKE = 6;
-const RADIUS = (SIZE - STROKE) / 2;
-const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-
-function Ring({ progress, color, label, done, size = SIZE }: RingConfig & { size?: number }) {
-  const r = (size - STROKE) / 2;
+export default function CompletionRings({ journal, goals, goalProgress }: CompletionRingsProps) {
+  const { colors } = useTheme();
+  const r = (SIZE - STROKE) / 2;
   const circ = 2 * Math.PI * r;
-  const offset = circ - Math.min(1, Math.max(0, progress)) * circ;
+
+  // Journal = 50%, goals progress = 50%
+  const combined = (journal ? 0.5 : 0) + goalProgress * 0.5;
+  const offset = circ - Math.min(1, Math.max(0, combined)) * circ;
+  const isDone = journal && goals;
 
   return (
-    <View style={[ringStyles.wrap, { width: size, height: size }]}>
-      <Svg width={size} height={size} style={ringStyles.svg}>
-        <Circle
-          cx={size / 2} cy={size / 2} r={r}
-          stroke={Colors.borderLight} strokeWidth={STROKE}
-          fill="none"
-        />
-        <Circle
-          cx={size / 2} cy={size / 2} r={r}
-          stroke={done ? color : color + '99'}
-          strokeWidth={STROKE}
-          fill="none"
-          strokeDasharray={`${circ} ${circ}`}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          rotation="-90"
-          origin={`${size / 2}, ${size / 2}`}
-        />
-      </Svg>
-      <View style={ringStyles.center}>
-        {done ? (
-          <Text style={[ringStyles.checkmark, { color }]}>+</Text>
-        ) : (
-          <Text style={[ringStyles.pct, { color: progress > 0 ? color : Colors.textTertiary }]}>
-            {Math.round(progress * 100)}
+    <View style={styles.container}>
+      <View style={[styles.ringWrap, { width: SIZE, height: SIZE }]}>
+        <Svg width={SIZE} height={SIZE} style={styles.svg}>
+          <Circle
+            cx={SIZE / 2} cy={SIZE / 2} r={r}
+            stroke={colors.borderLight} strokeWidth={STROKE}
+            fill="none"
+          />
+          <Circle
+            cx={SIZE / 2} cy={SIZE / 2} r={r}
+            stroke={isDone ? RING_COLOR : RING_COLOR + 'BB'}
+            strokeWidth={STROKE}
+            fill="none"
+            strokeDasharray={`${circ} ${circ}`}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            rotation="-90"
+            origin={`${SIZE / 2}, ${SIZE / 2}`}
+          />
+        </Svg>
+        <View style={styles.center}>
+          {isDone ? (
+            <Text style={[styles.doneText, { color: RING_COLOR }]}>✓</Text>
+          ) : (
+            <Text style={[styles.pctText, { color: combined > 0 ? RING_COLOR : colors.textTertiary }]}>
+              {Math.round(combined * 100)}%
+            </Text>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.labels}>
+        <View style={styles.labelRow}>
+          <View style={[styles.dot, { backgroundColor: journal ? '#1D6A3A' : colors.borderLight }]} />
+          <Text style={[styles.labelText, { color: journal ? colors.text : colors.textTertiary }]}>
+            Journal{journal ? ' ✓' : ''}
           </Text>
+        </View>
+        <View style={styles.labelRow}>
+          <View style={[styles.dot, { backgroundColor: goals ? RING_COLOR : colors.borderLight }]} />
+          <Text style={[styles.labelText, { color: goals ? colors.text : colors.textTertiary }]}>
+            Goals{goals ? ' ✓' : goalProgress > 0 ? ` ${Math.round(goalProgress * 100)}%` : ''}
+          </Text>
+        </View>
+        {isDone && (
+          <Text style={[styles.doneLabel, { color: colors.success }]}>Day Complete</Text>
         )}
       </View>
     </View>
   );
 }
 
-export default function CompletionRings({ journal, goals, goalProgress, reflection }: CompletionRingsProps) {
-  const rings: Array<RingConfig & { key: string }> = [
-    { key: 'journal', progress: journal ? 1 : 0, color: RING_COLORS.journal, label: 'Journal', done: journal },
-    { key: 'goals', progress: goals ? 1 : goalProgress, color: RING_COLORS.goals, label: 'Goals', done: goals },
-    { key: 'reflection', progress: reflection ? 1 : 0, color: RING_COLORS.reflection, label: 'Reflect', done: reflection },
-  ];
-
-  return (
-    <View style={styles.container}>
-      {rings.map((ring) => (
-        <View key={ring.key} style={styles.ringWrap}>
-          <Ring {...ring} />
-          <Text style={[styles.label, ring.done && { color: ring.color }]}>{ring.label}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-const ringStyles = StyleSheet.create({
-  wrap: { position: 'relative', justifyContent: 'center', alignItems: 'center' },
-  svg: { position: 'absolute', top: 0, left: 0 },
-  center: { position: 'absolute', justifyContent: 'center', alignItems: 'center' },
-  checkmark: { fontFamily: 'Inter-Bold', fontSize: 20, lineHeight: 24 },
-  pct: { fontFamily: 'Inter-Bold', fontSize: 11 },
-});
-
 const styles = StyleSheet.create({
   container: {
-    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
-    paddingVertical: Spacing.md,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
+    paddingVertical: Spacing.sm, paddingHorizontal: Spacing.sm,
   },
-  ringWrap: { alignItems: 'center', gap: 6 },
-  label: {
-    fontFamily: 'Inter-Medium', fontSize: FontSize.xs,
-    color: Colors.textTertiary, textTransform: 'uppercase', letterSpacing: 0.5,
-  },
+  ringWrap: { position: 'relative', justifyContent: 'center', alignItems: 'center' },
+  svg: { position: 'absolute', top: 0, left: 0 },
+  center: { position: 'absolute', justifyContent: 'center', alignItems: 'center' },
+  doneText: { fontFamily: 'Inter-Bold', fontSize: 24 },
+  pctText: { fontFamily: 'Inter-Bold', fontSize: 15 },
+  labels: { flex: 1, gap: 10 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  labelText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  doneLabel: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.xs, marginTop: 2, letterSpacing: 0.3 },
 });

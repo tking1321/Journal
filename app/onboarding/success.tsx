@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useOnboarding } from '@/contexts/OnboardingContext';
-import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { useTheme } from '@/contexts/ThemeContext';
+import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
 export default function SuccessScreen() {
   const router = useRouter();
   const { updateData } = useOnboarding();
+  const { colors } = useTheme();
   const [text, setText] = useState('');
 
   function handleNext() {
@@ -16,26 +18,34 @@ export default function SuccessScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Feather name="arrow-left" size={18} color={Colors.text} />
-        </Pressable>
-        <View style={styles.track}>
-          <View style={[styles.fill, { width: `${(10 / 11) * 100}%` }]} />
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: colors.surface }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.headerRow}>
+          <Pressable style={[styles.backButton, { backgroundColor: colors.surfaceElevated }]} onPress={() => router.back()}>
+            <Feather name="arrow-left" size={18} color={colors.text} />
+          </Pressable>
+          <View style={[styles.track, { backgroundColor: colors.borderLight }]}>
+            <View style={[styles.fill, { width: `${(10 / 11) * 100}%`, backgroundColor: colors.primary }]} />
+          </View>
+          <Text style={[styles.stepLabel, { color: colors.textTertiary }]}>10/11</Text>
         </View>
-        <Text style={styles.stepLabel}>10/11</Text>
-      </View>
 
-      <View style={styles.content}>
-        <Text style={styles.label}>STEP 10</Text>
-        <Text style={styles.title}>What does success look like in 30 days?</Text>
-        <Text style={styles.subtitle}>If you stick with this, what will change?</Text>
+        <Text style={[styles.label, { color: colors.textTertiary }]}>STEP 10</Text>
+        <Text style={[styles.title, { color: colors.text }]}>What does success look like in 30 days?</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>If you stick with this, what will change?</Text>
 
         <TextInput
-          style={styles.input}
+          style={[styles.input, { backgroundColor: colors.surfaceElevated, borderColor: colors.border, color: colors.text }]}
           placeholder={"e.g. \"I wake up with clarity, I ship work I'm proud of, I feel in control.\""}
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={colors.textTertiary}
           value={text}
           onChangeText={setText}
           multiline
@@ -43,47 +53,44 @@ export default function SuccessScreen() {
           textAlignVertical="top"
           autoFocus
         />
-      </View>
+      </ScrollView>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, { backgroundColor: colors.surface }]}>
         <Pressable
-          style={[styles.nextButton, !text.trim() && styles.nextButtonDisabled]}
+          style={[styles.nextButton, { backgroundColor: colors.primary }, !text.trim() && styles.nextButtonDisabled]}
           onPress={handleNext}
           disabled={!text.trim()}
         >
-          <Text style={styles.nextButtonText}>See your plan</Text>
-          <Feather name="arrow-right" size={16} color={Colors.textInverse} />
+          <Text style={[styles.nextButtonText, { color: colors.textInverse }]}>See your plan</Text>
+          <Feather name="arrow-right" size={16} color={colors.textInverse} />
         </Pressable>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.surface, paddingHorizontal: Spacing.lg, paddingTop: 56, paddingBottom: 32 },
+  container: { flex: 1 },
+  scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: 56, paddingBottom: Spacing.lg, flexGrow: 1 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
-  backButton: {
-    width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.surfaceElevated,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  track: { flex: 1, height: 3, backgroundColor: Colors.borderLight, borderRadius: BorderRadius.full, overflow: 'hidden' },
-  fill: { height: '100%', backgroundColor: Colors.primary, borderRadius: BorderRadius.full },
-  stepLabel: { fontFamily: 'Inter-Medium', fontSize: 11, color: Colors.textTertiary, minWidth: 28, textAlign: 'right' },
-  content: { flex: 1 },
-  label: { fontFamily: 'Inter-Bold', fontSize: 10, color: Colors.textTertiary, letterSpacing: 1, marginBottom: Spacing.sm },
-  title: { fontFamily: 'Inter-Bold', fontSize: FontSize.xl, color: Colors.text, lineHeight: 30, marginBottom: Spacing.sm },
-  subtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 22, marginBottom: Spacing.xl },
+  backButton: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
+  track: { flex: 1, height: 3, borderRadius: BorderRadius.full, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: BorderRadius.full },
+  stepLabel: { fontFamily: 'Inter-Medium', fontSize: 11, minWidth: 28, textAlign: 'right' },
+  label: { fontFamily: 'Inter-Bold', fontSize: 10, letterSpacing: 1, marginBottom: Spacing.sm },
+  title: { fontFamily: 'Inter-Bold', fontSize: FontSize.xl, lineHeight: 30, marginBottom: Spacing.sm },
+  subtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 22, marginBottom: Spacing.xl },
   input: {
-    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.border,
-    borderRadius: BorderRadius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.md,
-    fontFamily: 'Inter-Regular', fontSize: FontSize.md, color: Colors.text,
+    borderWidth: 1, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.md,
+    fontFamily: 'Inter-Regular', fontSize: FontSize.md,
     minHeight: 120, lineHeight: 24,
   },
-  footer: { paddingTop: Spacing.md },
+  footer: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 36 },
   nextButton: {
-    backgroundColor: Colors.primary, paddingVertical: 16, borderRadius: BorderRadius.md,
+    paddingVertical: 16, borderRadius: BorderRadius.md,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
   },
   nextButtonDisabled: { opacity: 0.3 },
-  nextButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse },
+  nextButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
 });

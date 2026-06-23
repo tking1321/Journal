@@ -1,4 +1,4 @@
-export const Colors = {
+export const LightColors = {
   primary: '#0A0A0A',
   primaryLight: '#2A2A2A',
   primaryDark: '#000000',
@@ -22,6 +22,40 @@ export const Colors = {
   shadow: 'rgba(0, 0, 0, 0.08)',
   overlay: 'rgba(0, 0, 0, 0.55)',
 };
+
+export const DarkColors = {
+  primary: '#F0F0F0',
+  primaryLight: '#CCCCCC',
+  primaryDark: '#FFFFFF',
+  secondary: '#888888',
+  secondaryLight: '#AAAAAA',
+  accent: '#C9A84C',
+  success: '#27AE60',
+  successLight: '#0D2818',
+  warning: '#E67E22',
+  error: '#E74C3C',
+  background: '#111111',
+  surface: '#1C1C1C',
+  surfaceElevated: '#252525',
+  surfaceDark: '#F0F0F0',
+  text: '#EEEEEE',
+  textSecondary: '#999999',
+  textTertiary: '#585858',
+  textInverse: '#111111',
+  border: '#2E2E2E',
+  borderLight: '#232323',
+  shadow: 'rgba(0, 0, 0, 0.4)',
+  overlay: 'rgba(0, 0, 0, 0.7)',
+};
+
+export type ColorScheme = typeof LightColors;
+
+export function getColors(isDark: boolean): ColorScheme {
+  return isDark ? DarkColors : LightColors;
+}
+
+// Backward compat alias
+export const Colors = LightColors;
 
 export const Spacing = {
   xs: 4,

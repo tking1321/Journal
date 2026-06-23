@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Animated } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
-import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import CompletionRings from '@/components/CompletionRings';
 
@@ -35,7 +36,6 @@ interface DailyRing {
   id?: string;
   journal_done: boolean;
   goals_done: boolean;
-  reflection_done: boolean;
   day_complete: boolean;
 }
 
@@ -80,19 +80,27 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   hard: '#C0392B',
 };
 
-const DIFFICULTY_BG: Record<string, string> = {
+const DIFFICULTY_BG_LIGHT: Record<string, string> = {
   easy: '#EDF5F0',
   medium: '#FFF4E6',
   hard: '#FDE8E6',
 };
 
+const DIFFICULTY_BG_DARK: Record<string, string> = {
+  easy: '#1a2e20',
+  medium: '#2e2010',
+  hard: '#2e1210',
+};
+
 export default function TodayScreen() {
   const { user, profile, refreshProfile } = useAuth();
+  const { colors, isDark } = useTheme();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [streak, setStreak] = useState<Streak | null>(null);
-  const [rings, setRings] = useState<DailyRing>({ journal_done: false, goals_done: false, reflection_done: false, day_complete: false });
-  const [aiReflection, setAiReflection] = useState('');
+  const [rings, setRings] = useState<DailyRing>({ journal_done: false, goals_done: false, day_complete: false });
+  const [aiInsight, setAiInsight] = useState('');
+  const [aiNextFocus, setAiNextFocus] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -137,7 +145,6 @@ export default function TodayScreen() {
       await updateRing({ journal_done: true }, fetchedRings);
     }
 
-    // Only generate if: no goals today AND categories exist AND not already generated today
     const alreadyGeneratedToday = profile?.last_goal_generation_date === today;
 
     if (fetchedGoals.length === 0 && fetchedCats.length > 0 && !alreadyGeneratedToday) {
@@ -153,15 +160,18 @@ export default function TodayScreen() {
       }
     }
 
-    // Only fetch reflection once per day — reuse cached coaching message if available
-    const cachedReflection = profile?.last_ai_request_type === 'reflection' &&
-      profile?.last_ai_request_date === today &&
-      (profile?.last_ai_response_json as Record<string, unknown> | null)?.reflection as string | undefined;
+    // Load cached daily AI insight
+    const cachedResponse = profile?.last_ai_response_json as Record<string, unknown> | null;
+    const cachedIsToday = profile?.last_ai_request_date === today && cachedResponse;
 
-    if (cachedReflection) {
-      setAiReflection(cachedReflection);
+    if (cachedIsToday) {
+      const reflection = cachedResponse?.reflection as string | undefined;
+      const insight = cachedResponse?.insight as string | undefined;
+      const nextFocus = cachedResponse?.next_focus as string | undefined;
+      if (reflection || insight) setAiInsight(reflection || insight || '');
+      if (nextFocus) setAiNextFocus(nextFocus);
     } else {
-      await fetchReflection(entries);
+      await fetchDailyInsight(entries);
     }
 
     setLoading(false);
@@ -170,11 +180,10 @@ export default function TodayScreen() {
   async function upsertRing(updates: Partial<DailyRing>): Promise<DailyRing> {
     const current = rings;
     const merged = { ...current, ...updates };
-    const allDone = merged.journal_done && merged.goals_done && merged.reflection_done;
+    const allDone = merged.journal_done && merged.goals_done;
     const wasDayComplete = current.day_complete;
-    const nowDayComplete = allDone;
 
-    merged.day_complete = nowDayComplete;
+    merged.day_complete = allDone;
 
     await supabase.from('daily_rings').upsert({
       ring_date: today,
@@ -183,7 +192,7 @@ export default function TodayScreen() {
 
     setRings(merged);
 
-    if (nowDayComplete && !wasDayComplete) {
+    if (allDone && !wasDayComplete) {
       triggerCelebration();
       await handleDayComplete();
     }
@@ -194,7 +203,7 @@ export default function TodayScreen() {
   async function updateRing(updates: Partial<DailyRing>, base?: DailyRing) {
     const current = base || rings;
     const merged = { ...current, ...updates };
-    const allDone = merged.journal_done && merged.goals_done && merged.reflection_done;
+    const allDone = merged.journal_done && merged.goals_done;
     merged.day_complete = allDone;
 
     await supabase.from('daily_rings').upsert({
@@ -329,7 +338,8 @@ export default function TodayScreen() {
           }));
           const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
           setGoals(newGoals || []);
-          if (json.reflection) setAiReflection(json.reflection);
+          if (json.reflection) setAiInsight(json.reflection);
+          if (json.next_focus) setAiNextFocus(json.next_focus);
 
           await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user!.id);
           return;
@@ -351,7 +361,7 @@ export default function TodayScreen() {
     await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user!.id);
   }
 
-  async function fetchReflection(entries: { content: string }[]) {
+  async function fetchDailyInsight(entries: { content: string }[]) {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
@@ -372,8 +382,9 @@ export default function TodayScreen() {
       });
 
       if (res.ok) {
-        const { reflection } = await res.json();
-        if (reflection) setAiReflection(reflection);
+        const json = await res.json();
+        if (json.reflection) setAiInsight(json.reflection);
+        if (json.next_focus) setAiNextFocus(json.next_focus);
       }
     } catch (_) {
       const fallback: Record<string, string[]> = {
@@ -383,7 +394,7 @@ export default function TodayScreen() {
         'direct action': ['Pick one thing. Do it completely.', "Clarity comes from action, not thinking."],
       };
       const phrases = fallback[profile?.coaching_style || 'gentle coach'] || fallback['gentle coach'];
-      setAiReflection(phrases[Math.floor(Math.random() * phrases.length)]);
+      setAiInsight(phrases[Math.floor(Math.random() * phrases.length)]);
     }
   }
 
@@ -416,7 +427,6 @@ export default function TodayScreen() {
     if (completed && goal) {
       await awardXp(goal.xp_value);
     } else if (!completed && goal) {
-      // Deduct XP if unchecking
       const newTotal = Math.max(0, (profile?.total_xp_earned || 0) - goal.xp_value);
       const newLevel = calculateLevel(newTotal);
       await supabase.from('profiles').update({
@@ -435,11 +445,6 @@ export default function TodayScreen() {
     }
   }
 
-  async function markReflectionDone() {
-    if (rings.reflection_done) return;
-    await upsertRing({ reflection_done: true });
-  }
-
   async function onRefresh() {
     setRefreshing(true);
     await loadData();
@@ -448,8 +453,8 @@ export default function TodayScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.center]}>
-        <Text style={styles.loadingText}>Preparing your day...</Text>
+      <View style={[styles.center, { flex: 1, backgroundColor: colors.background }]}>
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Preparing your day...</Text>
       </View>
     );
   }
@@ -461,124 +466,137 @@ export default function TodayScreen() {
   const streakGoal = streak?.streak_goal || 7;
   const dayOfMonth = new Date().getDate();
   const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
+  const diffBg = isDark ? DIFFICULTY_BG_DARK : DIFFICULTY_BG_LIGHT;
 
   return (
-    <View style={styles.outerContainer}>
+    <View style={[styles.outerContainer, { backgroundColor: colors.background }]}>
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.text} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} />}
       >
-        <Text style={styles.greeting}>{greeting}.</Text>
-        <Text style={styles.date}>
+        <Text style={[styles.greeting, { color: colors.text }]}>{greeting}.</Text>
+        <Text style={[styles.date, { color: colors.textSecondary }]}>
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </Text>
 
         {/* Level & XP Card */}
-        <View style={styles.levelCard}>
+        <View style={[styles.levelCard, { backgroundColor: colors.surface, borderColor: colors.accent + '40' }]}>
           <View style={styles.levelHeader}>
-            <View style={styles.levelBadge}>
-              <Text style={styles.levelBadgeText}>LVL {userLevel}</Text>
+            <View style={[styles.levelBadge, { backgroundColor: colors.primary }]}>
+              <Text style={[styles.levelBadgeText, { color: colors.textInverse }]}>LVL {userLevel}</Text>
             </View>
-            <Text style={styles.xpLabel}>
+            <Text style={[styles.xpLabel, { color: colors.textSecondary }]}>
               {currentXpInLevel} / {xpNeeded} XP to next level
             </Text>
           </View>
-          <View style={styles.xpBarTrack}>
-            <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any }]} />
+          <View style={[styles.xpBarTrack, { backgroundColor: colors.borderLight }]}>
+            <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any, backgroundColor: colors.accent }]} />
           </View>
-          <Text style={styles.totalXpText}>Total XP: {totalXp}</Text>
+          <Text style={[styles.totalXpText, { color: colors.textTertiary }]}>Total XP: {totalXp}</Text>
         </View>
 
         {/* Completion Rings */}
-        <View style={styles.ringsCard}>
+        <View style={[styles.ringsCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
           <CompletionRings
             journal={rings.journal_done}
             goals={rings.goals_done}
             goalProgress={goalProgress}
-            reflection={rings.reflection_done}
           />
           {rings.day_complete ? (
             <View style={styles.dayCompleteRow}>
-              <Feather name="check-circle" size={14} color={Colors.success} />
-              <Text style={styles.dayCompleteText}>Day Complete</Text>
+              <Feather name="check-circle" size={14} color={colors.success} />
+              <Text style={[styles.dayCompleteText, { color: colors.success }]}>Day Complete</Text>
             </View>
           ) : (
-            <Text style={styles.ringsHint}>Complete all 3 rings to close your day</Text>
+            <Text style={[styles.ringsHint, { color: colors.textTertiary }]}>Complete journal and all goals to close your day</Text>
           )}
         </View>
 
         {/* Streak bar */}
         {streak && (
-          <View style={styles.streakBar}>
-            <Feather name="zap" size={14} color={Colors.accent} />
-            <Text style={styles.streakText}>
+          <View style={[styles.streakBar, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+            <Feather name="zap" size={14} color={colors.accent} />
+            <Text style={[styles.streakText, { color: colors.text }]}>
               {streak.current_streak}/{streakGoal} days
             </Text>
-            <View style={styles.streakTrack}>
-              <View style={[styles.streakFill, { width: `${Math.min(1, streak.current_streak / streakGoal) * 100}%` as any }]} />
+            <View style={[styles.streakTrack, { backgroundColor: colors.borderLight }]}>
+              <View style={[styles.streakFill, { width: `${Math.min(1, streak.current_streak / streakGoal) * 100}%` as any, backgroundColor: colors.accent }]} />
             </View>
-            <Text style={styles.streakBest}>Best: {streak.longest_streak}</Text>
+            <Text style={[styles.streakBest, { color: colors.textTertiary }]}>Best: {streak.longest_streak}</Text>
           </View>
         )}
 
-        {/* AI coaching */}
-        {aiReflection ? (
-          <View style={styles.reflectionCard}>
-            <Text style={styles.reflectionLabel}>TODAY'S COACHING</Text>
-            <Text style={styles.reflectionText}>"{aiReflection}"</Text>
-            {!rings.reflection_done && (
-              <Pressable style={styles.reflectionDoneBtn} onPress={markReflectionDone}>
-                <Text style={styles.reflectionDoneBtnText}>Mark as read</Text>
-              </Pressable>
-            )}
+        {/* Daily Insights */}
+        {aiInsight ? (
+          <View style={[styles.insightsCard, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
+            <Text style={[styles.insightsLabel, { color: colors.textTertiary }]}>DAILY INSIGHTS</Text>
+            <Text style={[styles.insightsText, { color: colors.text }]}>{aiInsight}</Text>
+            {aiNextFocus ? (
+              <View style={[styles.nextFocusRow, { borderTopColor: colors.borderLight }]}>
+                <Text style={[styles.nextFocusLabel, { color: colors.textTertiary }]}>NEXT FOCUS</Text>
+                <Text style={[styles.nextFocusText, { color: colors.text }]}>{aiNextFocus}</Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
         {/* Goals */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Daily Goals</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Daily Goals</Text>
           {goals.length > 0 && (
-            <Text style={styles.progressText}>{completedCount}/{goals.length} done</Text>
+            <Text style={[styles.progressText, { color: colors.textTertiary }]}>{completedCount}/{goals.length} done</Text>
           )}
         </View>
 
         {generating ? (
-          <View style={styles.generatingCard}>
-            <Feather name="cpu" size={20} color={Colors.textTertiary} />
-            <Text style={styles.generatingText}>AI is generating your goals...</Text>
+          <View style={[styles.generatingCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Feather name="cpu" size={20} color={colors.textTertiary} />
+            <Text style={[styles.generatingText, { color: colors.textSecondary }]}>AI is generating your goals...</Text>
           </View>
         ) : goals.length === 0 && categories.length === 0 ? (
           <View style={styles.emptyState}>
-            <Feather name="layers" size={32} color={Colors.textTertiary} />
-            <Text style={styles.emptyTitle}>No categories yet</Text>
-            <Text style={styles.emptySubtitle}>Add categories in the Profile tab to generate daily goals</Text>
+            <Feather name="layers" size={32} color={colors.textTertiary} />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>No categories yet</Text>
+            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>Add categories in the Profile tab to generate daily goals</Text>
           </View>
         ) : (
           <View style={styles.goalsList}>
             {goals.map((goal) => (
               <Pressable
                 key={goal.id}
-                style={[styles.goalCard, goal.completed && styles.goalCardDone]}
+                style={[
+                  styles.goalCard,
+                  { backgroundColor: colors.surface, borderColor: colors.border },
+                  goal.completed && { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight },
+                ]}
                 onPress={() => toggleGoal(goal.id, !goal.completed)}
               >
-                <View style={[styles.checkbox, goal.completed && styles.checkboxDone]}>
-                  {goal.completed && <Feather name="check" size={12} color={Colors.textInverse} />}
+                <View style={[
+                  styles.checkbox,
+                  { borderColor: colors.border },
+                  goal.completed && { backgroundColor: colors.primary, borderColor: colors.primary },
+                ]}>
+                  {goal.completed && <Feather name="check" size={12} color={colors.textInverse} />}
                 </View>
                 <View style={styles.goalContent}>
-                  <Text style={[styles.goalTitle, goal.completed && styles.goalTitleDone]}>
+                  <Text style={[
+                    styles.goalTitle,
+                    { color: colors.text },
+                    goal.completed && { textDecorationLine: 'line-through', color: colors.textTertiary },
+                  ]}>
                     {goal.title}
                   </Text>
                   {goal.description ? (
-                    <Text style={styles.goalDesc}>{goal.description}</Text>
+                    <Text style={[styles.goalDesc, { color: colors.textSecondary }]}>{goal.description}</Text>
                   ) : null}
                   <View style={styles.goalMeta}>
-                    <View style={[styles.difficultyBadge, { backgroundColor: DIFFICULTY_BG[goal.difficulty] || DIFFICULTY_BG.easy }]}>
+                    <View style={[styles.difficultyBadge, { backgroundColor: diffBg[goal.difficulty] || diffBg.easy }]}>
                       <Text style={[styles.difficultyText, { color: DIFFICULTY_COLORS[goal.difficulty] || DIFFICULTY_COLORS.easy }]}>
                         {goal.difficulty}
                       </Text>
                     </View>
-                    <Text style={styles.xpValueText}>+{goal.xp_value} XP</Text>
+                    <Text style={[styles.xpValueText, { color: colors.accent }]}>+{goal.xp_value} XP</Text>
                   </View>
                 </View>
               </Pressable>
@@ -588,35 +606,35 @@ export default function TodayScreen() {
 
         {/* Monthly chapter hint */}
         <View style={styles.islandHint}>
-          <Feather name="map" size={13} color={Colors.textTertiary} />
-          <Text style={styles.islandHintText}>Day {dayOfMonth}/30 of this month's chapter</Text>
+          <Feather name="map" size={13} color={colors.textTertiary} />
+          <Text style={[styles.islandHintText, { color: colors.textTertiary }]}>Day {dayOfMonth}/30 of this month's chapter</Text>
         </View>
       </ScrollView>
 
       {/* XP gain toast */}
       {xpGain.visible && (
-        <View style={styles.xpToast}>
-          <Feather name="trending-up" size={14} color={Colors.accent} />
-          <Text style={styles.xpToastText}>+{xpGain.amount} XP</Text>
+        <View style={[styles.xpToast, { backgroundColor: colors.surface, borderColor: colors.accent + '60' }]}>
+          <Feather name="trending-up" size={14} color={colors.accent} />
+          <Text style={[styles.xpToastText, { color: colors.accent }]}>+{xpGain.amount} XP</Text>
         </View>
       )}
 
       {/* Celebration overlay */}
       {rings.day_complete && (
         <Animated.View style={[styles.celebrationOverlay, { opacity: celebrationOpacity }]} pointerEvents="none">
-          <View style={styles.celebrationCard}>
-            <Feather name="check-circle" size={28} color={Colors.success} />
-            <Text style={styles.celebrationTitle}>Day Complete</Text>
-            <Text style={styles.celebrationSub}>All 3 rings closed. Your streak continues.</Text>
+          <View style={[styles.celebrationCard, { backgroundColor: colors.surface, borderColor: colors.success + '40' }]}>
+            <Feather name="check-circle" size={28} color={colors.success} />
+            <Text style={[styles.celebrationTitle, { color: colors.text }]}>Day Complete</Text>
+            <Text style={[styles.celebrationSub, { color: colors.textSecondary }]}>Both rings closed. Your streak continues.</Text>
           </View>
         </Animated.View>
       )}
 
       {/* Achievement toast */}
       {newAchievement && (
-        <View style={styles.achievementToast}>
-          <Feather name="award" size={16} color={Colors.accent} />
-          <Text style={styles.achievementText}>{newAchievement.label}</Text>
+        <View style={[styles.achievementToast, { backgroundColor: colors.primary }]}>
+          <Feather name="award" size={16} color={colors.textInverse} />
+          <Text style={[styles.achievementText, { color: colors.textInverse }]}>{newAchievement.label}</Text>
         </View>
       )}
     </View>
@@ -624,135 +642,109 @@ export default function TodayScreen() {
 }
 
 const styles = StyleSheet.create({
-  outerContainer: { flex: 1, backgroundColor: Colors.background },
+  outerContainer: { flex: 1 },
   container: { flex: 1 },
   center: { justifyContent: 'center', alignItems: 'center' },
-  loadingText: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, color: Colors.textSecondary },
+  loadingText: { fontFamily: 'Inter-Medium', fontSize: FontSize.md },
   scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: 64, paddingBottom: 32 },
-  greeting: { fontFamily: 'Inter-Bold', fontSize: FontSize.xxl, color: Colors.text },
-  date: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, marginBottom: Spacing.lg },
+  greeting: { fontFamily: 'Inter-Bold', fontSize: FontSize.xxl },
+  date: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, marginTop: 4, marginBottom: Spacing.lg },
 
   levelCard: {
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent + '40',
-    borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md,
+    borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md,
   },
   levelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm },
-  levelBadge: {
-    backgroundColor: Colors.primary, paddingHorizontal: Spacing.sm + 4,
-    paddingVertical: 4, borderRadius: BorderRadius.sm,
-  },
-  levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: 12, color: Colors.textInverse, letterSpacing: 0.5 },
-  xpLabel: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, color: Colors.textSecondary },
-  xpBarTrack: {
-    height: 6, backgroundColor: Colors.borderLight, borderRadius: BorderRadius.full, overflow: 'hidden',
-  },
-  xpBarFill: { height: '100%', backgroundColor: Colors.accent, borderRadius: BorderRadius.full },
-  totalXpText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, marginTop: 6, textAlign: 'right' },
+  levelBadge: { paddingHorizontal: Spacing.sm + 4, paddingVertical: 4, borderRadius: BorderRadius.sm },
+  levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: 12, letterSpacing: 0.5 },
+  xpLabel: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
+  xpBarTrack: { height: 6, borderRadius: BorderRadius.full, overflow: 'hidden' },
+  xpBarFill: { height: '100%', borderRadius: BorderRadius.full },
+  totalXpText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 6, textAlign: 'right' },
 
   ringsCard: {
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.borderLight,
-    borderRadius: BorderRadius.lg, paddingHorizontal: Spacing.md, paddingTop: Spacing.sm,
+    borderWidth: 1, borderRadius: BorderRadius.lg, paddingHorizontal: Spacing.md, paddingTop: Spacing.sm,
     paddingBottom: Spacing.md, marginBottom: Spacing.md, alignItems: 'center',
   },
   dayCompleteRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginTop: 4 },
-  dayCompleteText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, color: Colors.success },
-  ringsHint: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, marginTop: 4 },
+  dayCompleteText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm },
+  ringsHint: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 4, textAlign: 'center' },
 
   streakBar: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.borderLight,
-    borderRadius: BorderRadius.sm, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 2,
-    marginBottom: Spacing.md,
+    borderWidth: 1, borderRadius: BorderRadius.sm, paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2, marginBottom: Spacing.md,
   },
-  streakText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, color: Colors.text, minWidth: 52 },
-  streakTrack: {
-    flex: 1, height: 3, backgroundColor: Colors.borderLight,
-    borderRadius: BorderRadius.full, overflow: 'hidden',
-  },
-  streakFill: { height: '100%', backgroundColor: Colors.accent, borderRadius: BorderRadius.full },
-  streakBest: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
+  streakText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, minWidth: 52 },
+  streakTrack: { flex: 1, height: 3, borderRadius: BorderRadius.full, overflow: 'hidden' },
+  streakFill: { height: '100%', borderRadius: BorderRadius.full },
+  streakBest: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 
-  reflectionCard: {
-    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
-    padding: Spacing.md, marginBottom: Spacing.lg,
+  insightsCard: {
+    borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.lg,
   },
-  reflectionLabel: { fontFamily: 'Inter-Bold', fontSize: 9, color: 'rgba(255,255,255,0.5)', letterSpacing: 1, marginBottom: 6 },
-  reflectionText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, color: Colors.textInverse, lineHeight: 20, fontStyle: 'italic' },
-  reflectionDoneBtn: { marginTop: Spacing.sm, alignSelf: 'flex-start' },
-  reflectionDoneBtnText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, color: 'rgba(255,255,255,0.5)' },
+  insightsLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 8 },
+  insightsText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 22 },
+  nextFocusRow: { borderTopWidth: 1, marginTop: Spacing.md, paddingTop: Spacing.md },
+  nextFocusLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
+  nextFocusText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, lineHeight: 20 },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
-  sectionTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.text },
-  progressText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
+  sectionTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
+  progressText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 
   goalsList: { gap: Spacing.sm },
   goalCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.surface, padding: Spacing.md,
-    borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border,
+    padding: Spacing.md, borderRadius: BorderRadius.md, borderWidth: 1,
   },
-  goalCardDone: { backgroundColor: Colors.surfaceElevated, borderColor: Colors.borderLight },
   checkbox: {
     width: 22, height: 22, borderRadius: 11, borderWidth: 1.5,
-    borderColor: Colors.border, justifyContent: 'center', alignItems: 'center', marginTop: 2,
+    justifyContent: 'center', alignItems: 'center', marginTop: 2,
   },
-  checkboxDone: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   goalContent: { flex: 1 },
-  goalTitle: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, color: Colors.text, lineHeight: 22 },
-  goalTitleDone: { textDecorationLine: 'line-through', color: Colors.textTertiary },
-  goalDesc: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 4, lineHeight: 18 },
+  goalTitle: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, lineHeight: 22 },
+  goalDesc: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 4, lineHeight: 18 },
   goalMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 8 },
-  difficultyBadge: {
-    paddingHorizontal: 8, paddingVertical: 2, borderRadius: BorderRadius.sm,
-  },
+  difficultyBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: BorderRadius.sm },
   difficultyText: { fontFamily: 'Inter-SemiBold', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  xpValueText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.xs, color: Colors.accent },
+  xpValueText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.xs },
 
   generatingCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
-    borderRadius: BorderRadius.md, padding: Spacing.md,
+    borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md,
   },
-  generatingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary },
+  generatingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm },
 
   emptyState: { alignItems: 'center', paddingVertical: Spacing.xxl, gap: Spacing.sm },
-  emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.text },
-  emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
+  emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center' },
 
   islandHint: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
     justifyContent: 'center', marginTop: Spacing.xl, paddingBottom: Spacing.md,
   },
-  islandHintText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
+  islandHintText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 
   xpToast: {
     position: 'absolute', top: 80, right: Spacing.lg,
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent + '60',
-    borderRadius: BorderRadius.full, paddingHorizontal: Spacing.md, paddingVertical: 6,
+    borderWidth: 1, borderRadius: BorderRadius.full, paddingHorizontal: Spacing.md, paddingVertical: 6,
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
-    shadowColor: Colors.accent, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4,
   },
-  xpToastText: { fontFamily: 'Inter-Bold', fontSize: FontSize.sm, color: Colors.accent },
+  xpToastText: { fontFamily: 'Inter-Bold', fontSize: FontSize.sm },
 
-  celebrationOverlay: {
-    position: 'absolute', bottom: 100, left: Spacing.lg, right: Spacing.lg,
-    alignItems: 'center',
-  },
+  celebrationOverlay: { position: 'absolute', bottom: 100, left: Spacing.lg, right: Spacing.lg, alignItems: 'center' },
   celebrationCard: {
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.success + '40',
-    borderRadius: BorderRadius.lg, padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm,
-    shadowColor: Colors.success, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
-    elevation: 8,
+    borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm,
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8,
   },
-  celebrationTitle: { fontFamily: 'Inter-Bold', fontSize: FontSize.lg, color: Colors.text },
-  celebrationSub: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  celebrationTitle: { fontFamily: 'Inter-Bold', fontSize: FontSize.lg },
+  celebrationSub: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center' },
 
   achievementToast: {
     position: 'absolute', bottom: 100, left: Spacing.lg, right: Spacing.lg,
-    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4,
+    borderRadius: BorderRadius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4,
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
   },
-  achievementText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, color: Colors.textInverse, flex: 1 },
+  achievementText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, flex: 1 },
 });

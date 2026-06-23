@@ -5,6 +5,7 @@ import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { OnboardingProvider } from '@/contexts/OnboardingContext';
 import { SubscriptionProvider } from '@/contexts/SubscriptionContext';
+import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { useFonts } from 'expo-font';
 import {
   Inter_400Regular,
@@ -15,6 +16,23 @@ import {
 import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync();
+
+function AppShell() {
+  const { isDark } = useTheme();
+  return (
+    <>
+      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="auth" />
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="paywall" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="+not-found" />
+      </Stack>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+    </>
+  );
+}
 
 export default function RootLayout() {
   useFrameworkReady();
@@ -37,20 +55,14 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <OnboardingProvider>
-        <SubscriptionProvider>
-          <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="auth" />
-            <Stack.Screen name="onboarding" />
-            <Stack.Screen name="paywall" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="+not-found" />
-          </Stack>
-          <StatusBar style="dark" />
-        </SubscriptionProvider>
-      </OnboardingProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <OnboardingProvider>
+          <SubscriptionProvider>
+            <AppShell />
+          </SubscriptionProvider>
+        </OnboardingProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
