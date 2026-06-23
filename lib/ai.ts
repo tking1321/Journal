@@ -192,6 +192,60 @@ Return strict JSON:
 }`;
   }
 
+  if (type === 'weekly_summary') {
+    const entriesText = (entries || [])
+      .map((e) => `[${e.entry_date}] ${e.content.slice(0, 150)}`)
+      .join('\n');
+    const completionRate =
+      (totalGoals || 0) > 0
+        ? Math.round(((goalsCompleted || 0) / (totalGoals || 1)) * 100)
+        : 0;
+
+    return `${baseContext}
+
+Request type: weekly_summary
+${streakContext}
+
+This week's journal entries:
+${entriesText || 'No entries this week.'}
+
+Stats: ${goalsCompleted}/${totalGoals} goals completed (${completionRate}% rate).
+
+Return strict JSON:
+{
+  "title": "Weekly Review",
+  "summary": "2-3 sentence summary of their week",
+  "goals": [],
+  "reflection": "One powerful coaching sentence for next week",
+  "next_focus": "The single most important area to focus on next week",
+  "insight": "One key pattern you notice from their data"
+}`;
+  }
+
+  if (type === 'onboarding_plan') {
+    const categoryList = (categories || [])
+      .map((c) => `- ${c.name}: ${c.growth_description || 'grow in this area'}`)
+      .join('\n');
+
+    return `${baseContext}
+
+Request type: onboarding_plan
+The user has just completed onboarding. Generate a personalized 30-day growth plan summary based on their specific answers.
+
+Growth areas they chose:
+${categoryList}
+
+Return strict JSON:
+{
+  "title": "Your 30-Day Journey",
+  "summary": "2-3 sentence personalized plan overview tied to their specific categories and biggest obstacle",
+  "goals": [],
+  "reflection": "One powerful motivating sentence personalized to their coaching style and 30-day vision",
+  "next_focus": "The single most important thing to focus on in week one",
+  "insight": ""
+}`;
+  }
+
   return `Return JSON: { "title": "", "summary": "Unknown request type", "goals": [], "reflection": "", "next_focus": "", "insight": "" }`;
 }
 
@@ -320,11 +374,75 @@ export async function generateDailyInsight(params: {
       last_ai_request_type: 'reflection',
       last_ai_request_date: today,
       last_ai_response_json: result as unknown as Record<string, unknown>,
+      last_insight_generation_date: today,
     }).eq('id', userId);
 
     return result;
   } catch (err) {
     console.warn('AI daily insight failed:', err);
+    return null;
+  }
+}
+
+export async function generateWeeklySummary(params: {
+  userId: string;
+  entries: Array<{ content: string; entry_date: string }>;
+  goalsCompleted: number;
+  totalGoals: number;
+  profile: AiProfile;
+  streakData: { current_streak: number; longest_streak: number } | null;
+  today: string;
+}): Promise<AiResult | null> {
+  const { userId, entries, goalsCompleted, totalGoals, profile, streakData, today } = params;
+
+  try {
+    const prompt = buildUserPrompt({
+      type: 'weekly_summary',
+      entries,
+      goalsCompleted,
+      totalGoals,
+      profile,
+      streakData,
+    });
+
+    const result = await callOpenAI(prompt);
+
+    await supabase.from('profiles').update({
+      last_summary_generation_date: today,
+      last_weekly_summary_json: result as unknown as Record<string, unknown>,
+    }).eq('id', userId);
+
+    return result;
+  } catch (err) {
+    console.warn('AI weekly summary failed:', err);
+    return null;
+  }
+}
+
+export async function generateOnboardingPlan(params: {
+  userId: string;
+  categories: Array<{ name: string; growth_description?: string | null }>;
+  profile: AiProfile;
+  today: string;
+}): Promise<AiResult | null> {
+  const { userId, categories, profile, today } = params;
+
+  try {
+    const prompt = buildUserPrompt({
+      type: 'onboarding_plan',
+      categories,
+      profile,
+    });
+
+    const result = await callOpenAI(prompt);
+
+    await supabase.from('profiles').update({
+      last_plan_generation_date: today,
+    }).eq('id', userId);
+
+    return result;
+  } catch (err) {
+    console.warn('AI onboarding plan failed:', err);
     return null;
   }
 }

@@ -1,8 +1,10 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { generateOnboardingPlan } from '@/lib/ai';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
@@ -13,10 +15,59 @@ const COACH_LABELS: Record<string, string> = {
   'direct action': 'Direct Action — clear steps, no fluff',
 };
 
+interface AiPlan {
+  title: string;
+  summary: string;
+  reflection: string;
+  next_focus: string;
+}
+
 export default function PreviewScreen() {
   const router = useRouter();
   const { data } = useOnboarding();
   const { user, updateProfile } = useAuth();
+  const [planLoading, setPlanLoading] = useState(false);
+  const [aiPlan, setAiPlan] = useState<AiPlan | null>(null);
+  const [planGenerated, setPlanGenerated] = useState(false);
+
+  const today = new Date().toISOString().split('T')[0];
+
+  // Called only when user explicitly presses "Generate My Plan"
+  async function handleGeneratePlan() {
+    if (planLoading || planGenerated || !user) return;
+
+    setPlanLoading(true);
+
+    try {
+      const result = await generateOnboardingPlan({
+        userId: user.id,
+        categories: data.categories.map((c) => ({
+          name: c.name,
+          growth_description: c.growthDescription,
+        })),
+        profile: {
+          coaching_style: data.coachingStyle,
+          journaling_style: data.journalingStyle,
+          biggest_obstacle: data.biggestObstacle,
+          success_vision: data.successVision,
+          daily_goal_limit: data.dailyGoalLimit,
+        },
+        today,
+      });
+
+      if (result) {
+        setAiPlan({
+          title: result.title || 'Your 30-Day Journey',
+          summary: result.summary || '',
+          reflection: result.reflection || '',
+          next_focus: result.next_focus || '',
+        });
+        setPlanGenerated(true);
+      }
+    } finally {
+      setPlanLoading(false);
+    }
+  }
 
   async function handleContinue() {
     if (!user) return;
@@ -101,6 +152,55 @@ export default function PreviewScreen() {
           </View>
         </View>
 
+        {/* AI-generated personalized plan — shown after button press */}
+        {aiPlan ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>YOUR PERSONALIZED STRATEGY</Text>
+            <View style={styles.aiPlanCard}>
+              <View style={styles.aiPlanHeader}>
+                <Feather name="cpu" size={14} color={Colors.primary} />
+                <Text style={styles.aiPlanTitle}>{aiPlan.title}</Text>
+              </View>
+              {aiPlan.summary ? (
+                <Text style={styles.aiPlanSummary}>{aiPlan.summary}</Text>
+              ) : null}
+              {aiPlan.reflection ? (
+                <View style={styles.aiPlanRow}>
+                  <Text style={styles.aiPlanRowLabel}>COACHING MESSAGE</Text>
+                  <Text style={styles.aiPlanRowText}>{aiPlan.reflection}</Text>
+                </View>
+              ) : null}
+              {aiPlan.next_focus ? (
+                <View style={styles.aiPlanRow}>
+                  <Text style={styles.aiPlanRowLabel}>WEEK ONE FOCUS</Text>
+                  <Text style={[styles.aiPlanRowText, styles.aiPlanFocusText]}>{aiPlan.next_focus}</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        ) : (
+          <View style={styles.section}>
+            <Pressable
+              style={[styles.generatePlanButton, planLoading && styles.generatePlanButtonDisabled]}
+              onPress={handleGeneratePlan}
+              disabled={planLoading}
+            >
+              {planLoading ? (
+                <>
+                  <ActivityIndicator size="small" color={Colors.textInverse} />
+                  <Text style={styles.generatePlanButtonText}>Generating your plan...</Text>
+                </>
+              ) : (
+                <>
+                  <Feather name="cpu" size={16} color={Colors.textInverse} />
+                  <Text style={styles.generatePlanButtonText}>Generate My Plan</Text>
+                </>
+              )}
+            </Pressable>
+            <Text style={styles.generatePlanHint}>Uses AI to create a plan personalized to your answers</Text>
+          </View>
+        )}
+
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>WHAT YOU'LL GET</Text>
           <View style={styles.benefitsCard}>
@@ -166,6 +266,27 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary, borderRadius: BorderRadius.md, padding: Spacing.md,
   },
   coachLabel: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse, textTransform: 'capitalize' },
+  generatePlanButton: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md, paddingVertical: Spacing.md,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
+  },
+  generatePlanButtonDisabled: { opacity: 0.5 },
+  generatePlanButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse },
+  generatePlanHint: {
+    fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary,
+    textAlign: 'center', marginTop: Spacing.sm,
+  },
+  aiPlanCard: {
+    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.borderLight,
+    borderRadius: BorderRadius.md, padding: Spacing.md,
+  },
+  aiPlanHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.sm },
+  aiPlanTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.text },
+  aiPlanSummary: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 22 },
+  aiPlanRow: { marginTop: Spacing.md, paddingTop: Spacing.md, borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  aiPlanRowLabel: { fontFamily: 'Inter-Bold', fontSize: 9, color: Colors.textTertiary, letterSpacing: 1, marginBottom: 4 },
+  aiPlanRowText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  aiPlanFocusText: { fontFamily: 'Inter-SemiBold', color: Colors.text },
   benefitsCard: {
     backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.borderLight,
     borderRadius: BorderRadius.md, padding: Spacing.md, gap: Spacing.sm,

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, Pressable } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
+import { generateWeeklySummary } from '@/lib/ai';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
@@ -26,12 +27,18 @@ interface IslandData {
 export default function InsightsScreen() {
   const { user, profile } = useAuth();
   const { colors } = useTheme();
-  const [stats, setStats] = useState({ entries: 0, goalsCompleted: 0, streak: 0, longestStreak: 0, completion: 0 });
+  const [stats, setStats] = useState({ entries: 0, goalsCompleted: 0, goalsTotal: 0, streak: 0, longestStreak: 0, completion: 0 });
   const [prevStats, setPrevStats] = useState({ entries: 0 });
   const [calendarDays, setCalendarDays] = useState<DayStatus[]>([]);
   const [island, setIsland] = useState<IslandData | null>(null);
   const [achievements, setAchievements] = useState<AchievementRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // Weekly summary state
+  const [weeklySummary, setWeeklySummary] = useState<{ summary: string; reflection: string; next_focus: string; insight: string } | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  // Stored for use by the button handler without re-fetching
+  const [weeklyEntries, setWeeklyEntries] = useState<{ content: string; entry_date: string }[]>([]);
+  const [weeklyStreak, setWeeklyStreak] = useState<{ current_streak: number; longest_streak: number } | null>(null);
 
   const today = new Date().toISOString().split('T')[0];
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
@@ -70,14 +77,31 @@ export default function InsightsScreen() {
     setStats({
       entries: entries.length,
       goalsCompleted,
+      goalsTotal: goals.length,
       streak: streak?.current_streak || 0,
       longestStreak: streak?.longest_streak || 0,
       completion,
     });
 
+    // Store for weekly summary button handler
+    setWeeklyEntries(entries);
+    setWeeklyStreak(streak ? { current_streak: streak.current_streak, longest_streak: streak.longest_streak } : null);
+
     setPrevStats({ entries: oldEntries.length });
     setIsland(islandRes.data);
     setAchievements(achievementsRes.data || []);
+
+    // Load cached weekly summary — never auto-generate
+    const lastSummaryDate = profile?.last_summary_generation_date as string | null;
+    const cachedSummaryJson = profile?.last_weekly_summary_json as Record<string, unknown> | null;
+    if (lastSummaryDate === today && cachedSummaryJson) {
+      setWeeklySummary({
+        summary: (cachedSummaryJson.summary as string) || '',
+        reflection: (cachedSummaryJson.reflection as string) || '',
+        next_focus: (cachedSummaryJson.next_focus as string) || '',
+        insight: (cachedSummaryJson.insight as string) || '',
+      });
+    }
 
     // Build calendar days for the current month
     const ringsMap = new Map<string, { journal: boolean; goals: boolean; complete: boolean }>();
@@ -106,6 +130,41 @@ export default function InsightsScreen() {
   }, [user, weekAgo, monthAgo, thisMonth, daysInMonth, calendarMonth, calendarYear, today]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Called only when user explicitly presses "Get Weekly Summary"
+  async function handleGetWeeklySummary() {
+    if (summaryLoading) return;
+    if (!user) return;
+
+    setSummaryLoading(true);
+
+    try {
+      const result = await generateWeeklySummary({
+        userId: user.id,
+        entries: weeklyEntries,
+        goalsCompleted: stats.goalsCompleted,
+        totalGoals: stats.goalsTotal,
+        profile: {
+          coaching_style: profile?.coaching_style,
+          success_vision: profile?.success_vision,
+          biggest_obstacle: profile?.biggest_obstacle,
+        },
+        streakData: weeklyStreak,
+        today,
+      });
+
+      if (result) {
+        setWeeklySummary({
+          summary: result.summary || '',
+          reflection: result.reflection || '',
+          next_focus: result.next_focus || '',
+          insight: result.insight || '',
+        });
+      }
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
 
   const weeklyRate = stats.entries;
   const prevWeeklyRate = prevStats.entries;
@@ -289,6 +348,55 @@ export default function InsightsScreen() {
         </Text>
       </View>
 
+      {/* Weekly Summary — manual only */}
+      <View style={[styles.sectionLabel, { marginTop: Spacing.lg }]}>
+        <Text style={[styles.sectionLabelText, { color: colors.textTertiary }]}>WEEKLY SUMMARY</Text>
+      </View>
+
+      {weeklySummary ? (
+        <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+          {weeklySummary.summary ? (
+            <Text style={[styles.summaryText, { color: colors.text }]}>{weeklySummary.summary}</Text>
+          ) : null}
+          {weeklySummary.reflection ? (
+            <View style={[styles.summaryRow, { borderTopColor: colors.borderLight }]}>
+              <Text style={[styles.summaryRowLabel, { color: colors.textTertiary }]}>COACHING</Text>
+              <Text style={[styles.summaryRowText, { color: colors.textSecondary }]}>{weeklySummary.reflection}</Text>
+            </View>
+          ) : null}
+          {weeklySummary.next_focus ? (
+            <View style={[styles.summaryRow, { borderTopColor: colors.borderLight }]}>
+              <Text style={[styles.summaryRowLabel, { color: colors.textTertiary }]}>NEXT FOCUS</Text>
+              <Text style={[styles.summaryRowText, { color: colors.text }]}>{weeklySummary.next_focus}</Text>
+            </View>
+          ) : null}
+          {weeklySummary.insight ? (
+            <View style={[styles.summaryRow, { borderTopColor: colors.borderLight }]}>
+              <Text style={[styles.summaryRowLabel, { color: colors.textTertiary }]}>KEY PATTERN</Text>
+              <Text style={[styles.summaryRowText, { color: colors.textSecondary, fontStyle: 'italic' }]}>{weeklySummary.insight}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : (
+        <Pressable
+          style={[styles.summaryButton, { backgroundColor: colors.surface, borderColor: colors.borderLight }, summaryLoading && styles.buttonDisabled]}
+          onPress={handleGetWeeklySummary}
+          disabled={summaryLoading}
+        >
+          {summaryLoading ? (
+            <>
+              <Feather name="cpu" size={14} color={colors.textTertiary} />
+              <Text style={[styles.summaryButtonText, { color: colors.textSecondary }]}>Generating summary...</Text>
+            </>
+          ) : (
+            <>
+              <Feather name="bar-chart-2" size={14} color={colors.accent} />
+              <Text style={[styles.summaryButtonText, { color: colors.text }]}>Get Weekly Summary</Text>
+            </>
+          )}
+        </Pressable>
+      )}
+
       {/* Achievements */}
       {achievements.length > 0 && (
         <>
@@ -396,4 +504,18 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', paddingVertical: Spacing.xxl, gap: Spacing.sm },
   emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, marginTop: Spacing.sm },
   emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center', lineHeight: 20 },
+
+  summaryButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
+    borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.lg,
+  },
+  summaryButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  summaryCard: {
+    borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.lg,
+  },
+  summaryText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 22 },
+  summaryRow: { borderTopWidth: 1, marginTop: Spacing.md, paddingTop: Spacing.md },
+  summaryRowLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
+  summaryRowText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20 },
+  buttonDisabled: { opacity: 0.45 },
 });

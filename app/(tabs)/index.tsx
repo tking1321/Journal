@@ -104,9 +104,13 @@ export default function TodayScreen() {
   const [aiNextFocus, setAiNextFocus] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Separate locks per action — prevent double-tap and auto-fire
   const [generating, setGenerating] = useState(false);
+  const [insightLoading, setInsightLoading] = useState(false);
   const [newAchievement, setNewAchievement] = useState<Achievement | null>(null);
   const [xpGain, setXpGain] = useState<{ amount: number; visible: boolean }>({ amount: 0, visible: false });
+  // Stored for use by button handlers without re-fetching
+  const [recentEntries, setRecentEntries] = useState<{ content: string; entry_date: string }[]>([]);
   const celebrationOpacity = useRef(new Animated.Value(0)).current;
 
   const today = new Date().toISOString().split('T')[0];
@@ -117,6 +121,7 @@ export default function TodayScreen() {
   const currentXpInLevel = getXpInCurrentLevel(totalXp, userLevel);
   const xpNeeded = getXpForNextLevel(userLevel);
 
+  // Loads data only — no API calls
   const loadData = useCallback(async () => {
     if (!user) return;
 
@@ -136,6 +141,7 @@ export default function TodayScreen() {
 
     setCategories(fetchedCats);
     setStreak(fetchedStreak);
+    setRecentEntries(entries);
 
     if (fetchedRings) {
       setRings(fetchedRings);
@@ -146,33 +152,24 @@ export default function TodayScreen() {
       await updateRing({ journal_done: true }, fetchedRings);
     }
 
-    const alreadyGeneratedToday = profile?.last_goal_generation_date === today;
+    setGoals(fetchedGoals);
 
-    if (fetchedGoals.length === 0 && fetchedCats.length > 0 && !alreadyGeneratedToday) {
-      setGenerating(true);
-      await generateGoalsWithAI(fetchedCats, entries, fetchedStreak);
-      setGenerating(false);
-    } else {
-      setGoals(fetchedGoals);
-      if (fetchedGoals.length > 0 && fetchedGoals.every((g) => g.completed)) {
-        if (fetchedRings && !fetchedRings.goals_done) {
-          await updateRing({ goals_done: true }, fetchedRings);
-        }
+    if (fetchedGoals.length > 0 && fetchedGoals.every((g) => g.completed)) {
+      if (fetchedRings && !fetchedRings.goals_done) {
+        await updateRing({ goals_done: true }, fetchedRings);
       }
     }
 
-    // Load cached daily AI insight
+    // Load cached insight — never auto-generate
+    const lastInsightDate = profile?.last_insight_generation_date as string | null;
     const cachedResponse = profile?.last_ai_response_json as Record<string, unknown> | null;
-    const cachedIsToday = profile?.last_ai_request_date === today && cachedResponse;
 
-    if (cachedIsToday) {
+    if (lastInsightDate === today && cachedResponse) {
       const reflection = cachedResponse?.reflection as string | undefined;
       const insight = cachedResponse?.insight as string | undefined;
       const nextFocus = cachedResponse?.next_focus as string | undefined;
       if (reflection || insight) setAiInsight(reflection || insight || '');
       if (nextFocus) setAiNextFocus(nextFocus);
-    } else {
-      await fetchDailyInsight(entries);
     }
 
     setLoading(false);
@@ -275,84 +272,108 @@ export default function TodayScreen() {
     }
   }
 
-  async function generateGoalsWithAI(cats: Category[], entries: { content: string; entry_date: string }[], streakData: Streak | null) {
-    const { data: previousGoals } = await supabase
-      .from('goals')
-      .select('title, completed, difficulty')
-      .order('created_at', { ascending: false })
-      .limit(12);
+  // Called only when user explicitly presses "Generate Today's Goals" or "Refresh Goals"
+  async function handleGenerateGoals(isRefresh = false) {
+    if (generating) return;
+    if (!user || categories.length === 0) return;
 
-    const result = await generateGoals({
-      userId: user!.id,
-      categories: cats,
-      recentEntries: entries,
-      previousGoals: previousGoals || [],
-      streakData: streakData ? { current_streak: streakData.current_streak, longest_streak: streakData.longest_streak } : null,
-      profile: {
-        coaching_style: profile?.coaching_style,
-        journaling_style: profile?.journaling_style,
-        biggest_obstacle: profile?.biggest_obstacle,
-        success_vision: profile?.success_vision,
-        user_level: profile?.user_level,
-        total_xp_earned: profile?.total_xp_earned,
-        daily_goal_limit: profile?.daily_goal_limit,
-      },
-      today,
-    });
+    setGenerating(true);
 
-    if (result && result.goals.length > 0) {
-      const inserts = result.goals.map((g) => ({
-        title: g.title || g.text || 'Daily goal',
-        description: g.description || '',
-        goal_date: today,
-        category_id: cats.find((c) => c.name === g.categoryName)?.id || null,
-        difficulty: g.difficulty || 'easy',
-        xp_value: g.xp || 5,
-      }));
-      const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
-      setGoals(newGoals || []);
-      if (result.reflection) setAiInsight(result.reflection);
-      if (result.next_focus) setAiNextFocus(result.next_focus);
-      return;
+    try {
+      if (isRefresh) {
+        await supabase.from('goals').delete().eq('goal_date', today).eq('user_id', user.id);
+        setGoals([]);
+      }
+
+      const { data: previousGoals } = await supabase
+        .from('goals')
+        .select('title, completed, difficulty')
+        .order('created_at', { ascending: false })
+        .limit(12);
+
+      const result = await generateGoals({
+        userId: user.id,
+        categories,
+        recentEntries,
+        previousGoals: previousGoals || [],
+        streakData: streak ? { current_streak: streak.current_streak, longest_streak: streak.longest_streak } : null,
+        profile: {
+          coaching_style: profile?.coaching_style,
+          journaling_style: profile?.journaling_style,
+          biggest_obstacle: profile?.biggest_obstacle,
+          success_vision: profile?.success_vision,
+          user_level: profile?.user_level,
+          total_xp_earned: profile?.total_xp_earned,
+          daily_goal_limit: profile?.daily_goal_limit,
+        },
+        today,
+      });
+
+      if (result && result.goals.length > 0) {
+        const inserts = result.goals.map((g) => ({
+          title: g.title || g.text || 'Daily goal',
+          description: g.description || '',
+          goal_date: today,
+          category_id: categories.find((c) => c.name === g.categoryName)?.id || null,
+          difficulty: g.difficulty || 'easy',
+          xp_value: g.xp || 5,
+        }));
+        const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
+        setGoals(newGoals || []);
+        if (result.reflection) setAiInsight(result.reflection);
+        if (result.next_focus) setAiNextFocus(result.next_focus);
+      } else {
+        // Fallback: category-based goals when AI returns nothing
+        const fallbackGoals = categories.slice(0, profile?.daily_goal_limit || 3).map((cat, i) => ({
+          title: `Focused time on: ${cat.name}`,
+          description: cat.growth_description || `Build your ${cat.name} practice today`,
+          goal_date: today,
+          category_id: cat.id,
+          difficulty: i === 0 ? 'hard' : i === 1 ? 'medium' : 'easy',
+          xp_value: i === 0 ? 20 : i === 1 ? 10 : 5,
+        }));
+        const { data: newGoals } = await supabase.from('goals').insert(fallbackGoals).select();
+        setGoals(newGoals || []);
+        await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user.id);
+      }
+    } finally {
+      setGenerating(false);
     }
-
-    // Fallback: generate simple goals without AI
-    const fallbackGoals = cats.slice(0, profile?.daily_goal_limit || 3).map((cat, i) => ({
-      title: `Focused time on: ${cat.name}`,
-      description: cat.growth_description || `Build your ${cat.name} practice today`,
-      goal_date: today,
-      category_id: cat.id,
-      difficulty: i === 0 ? 'hard' : i === 1 ? 'medium' : 'easy',
-      xp_value: i === 0 ? 20 : i === 1 ? 10 : 5,
-    }));
-    const { data: newGoals } = await supabase.from('goals').insert(fallbackGoals).select();
-    setGoals(newGoals || []);
-    await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user!.id);
   }
 
-  async function fetchDailyInsight(entries: { content: string }[]) {
-    const result = await generateDailyInsight({
-      userId: user!.id,
-      recentEntries: entries,
-      profile: {
-        coaching_style: profile?.coaching_style,
-        success_vision: profile?.success_vision,
-      },
-      today,
-    });
+  // Called only when user explicitly presses "Get Today's Insight"
+  async function handleGetInsight() {
+    if (insightLoading) return;
+    if (!user) return;
 
-    if (result?.reflection) setAiInsight(result.reflection);
-    if (result?.next_focus) setAiNextFocus(result.next_focus);
+    setInsightLoading(true);
 
-    if (!result) {
-      const fallback: Record<string, string[]> = {
-        'strict coach': ['Show up. No excuses today.', 'Discipline beats motivation every time.'],
-        'gentle coach': ["You're building something real.", 'Every small step compounds.'],
-        'reflective prompts': ['What would your future self thank you for today?', 'What does progress look like right now?'],
-        'direct action': ['Pick one thing. Do it completely.', "Clarity comes from action, not thinking."],
-      };
-      const phrases = fallback[profile?.coaching_style || 'gentle coach'] || fallback['gentle coach'];
-      setAiInsight(phrases[Math.floor(Math.random() * phrases.length)]);
+    try {
+      const result = await generateDailyInsight({
+        userId: user.id,
+        recentEntries,
+        profile: {
+          coaching_style: profile?.coaching_style,
+          success_vision: profile?.success_vision,
+        },
+        today,
+      });
+
+      if (result?.reflection) setAiInsight(result.reflection);
+      if (result?.next_focus) setAiNextFocus(result.next_focus);
+
+      if (!result) {
+        const fallback: Record<string, string[]> = {
+          'strict coach': ['Show up. No excuses today.', 'Discipline beats motivation every time.'],
+          'gentle coach': ["You're building something real.", 'Every small step compounds.'],
+          'reflective prompts': ['What would your future self thank you for today?', 'What does progress look like right now?'],
+          'direct action': ['Pick one thing. Do it completely.', "Clarity comes from action, not thinking."],
+        };
+        const phrases = fallback[profile?.coaching_style || 'gentle coach'] || fallback['gentle coach'];
+        setAiInsight(phrases[Math.floor(Math.random() * phrases.length)]);
+      }
+    } finally {
+      setInsightLoading(false);
     }
   }
 
@@ -426,6 +447,8 @@ export default function TodayScreen() {
   const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
   const diffBg = isDark ? DIFFICULTY_BG_DARK : DIFFICULTY_BG_LIGHT;
 
+  const insightAlreadyToday = (profile?.last_insight_generation_date as string | null) === today;
+
   return (
     <View style={[styles.outerContainer, { backgroundColor: colors.background }]}>
       <ScrollView
@@ -485,7 +508,7 @@ export default function TodayScreen() {
           </View>
         )}
 
-        {/* Daily Insights */}
+        {/* Daily Insights — shown when cached, or button to generate */}
         {aiInsight ? (
           <View style={[styles.insightsCard, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
             <Text style={[styles.insightsLabel, { color: colors.textTertiary }]}>DAILY INSIGHTS</Text>
@@ -497,16 +520,49 @@ export default function TodayScreen() {
               </View>
             ) : null}
           </View>
-        ) : null}
+        ) : (
+          <Pressable
+            style={[styles.insightButton, { backgroundColor: colors.surface, borderColor: colors.borderLight }, insightLoading && styles.buttonDisabled]}
+            onPress={handleGetInsight}
+            disabled={insightLoading || insightAlreadyToday}
+          >
+            {insightLoading ? (
+              <>
+                <Feather name="cpu" size={14} color={colors.textTertiary} />
+                <Text style={[styles.insightButtonText, { color: colors.textSecondary }]}>Getting insight...</Text>
+              </>
+            ) : (
+              <>
+                <Feather name="sun" size={14} color={colors.accent} />
+                <Text style={[styles.insightButtonText, { color: colors.text }]}>Get Today's Insight</Text>
+              </>
+            )}
+          </Pressable>
+        )}
 
-        {/* Goals */}
+        {/* Goals header */}
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Daily Goals</Text>
-          {goals.length > 0 && (
-            <Text style={[styles.progressText, { color: colors.textTertiary }]}>{completedCount}/{goals.length} done</Text>
-          )}
+          <View style={styles.sectionHeaderRight}>
+            {goals.length > 0 && (
+              <Text style={[styles.progressText, { color: colors.textTertiary }]}>{completedCount}/{goals.length} done</Text>
+            )}
+            {goals.length > 0 && (
+              <Pressable
+                style={[styles.refreshButton, { borderColor: colors.borderLight }, generating && styles.buttonDisabled]}
+                onPress={() => handleGenerateGoals(true)}
+                disabled={generating}
+              >
+                <Feather name="refresh-cw" size={12} color={generating ? colors.textTertiary : colors.textSecondary} />
+                <Text style={[styles.refreshButtonText, { color: generating ? colors.textTertiary : colors.textSecondary }]}>
+                  {generating ? 'Refreshing...' : 'Refresh'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
         </View>
 
+        {/* Goals content */}
         {generating ? (
           <View style={[styles.generatingCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Feather name="cpu" size={20} color={colors.textTertiary} />
@@ -518,6 +574,17 @@ export default function TodayScreen() {
             <Text style={[styles.emptyTitle, { color: colors.text }]}>No categories yet</Text>
             <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>Add categories in the Profile tab to generate daily goals</Text>
           </View>
+        ) : goals.length === 0 ? (
+          <Pressable
+            style={[styles.generateButton, { backgroundColor: colors.primary }, generating && styles.buttonDisabled]}
+            onPress={() => handleGenerateGoals(false)}
+            disabled={generating}
+          >
+            <Feather name="zap" size={16} color={colors.textInverse} />
+            <Text style={[styles.generateButtonText, { color: colors.textInverse }]}>
+              Generate Today's Goals
+            </Text>
+          </Pressable>
         ) : (
           <View style={styles.goalsList}>
             {goals.map((goal) => (
@@ -646,9 +713,33 @@ const styles = StyleSheet.create({
   nextFocusLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
   nextFocusText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, lineHeight: 20 },
 
+  insightButton: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md,
+    marginBottom: Spacing.lg, justifyContent: 'center',
+  },
+  insightButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
+  sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   sectionTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
   progressText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
+
+  refreshButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderWidth: 1, borderRadius: BorderRadius.sm,
+    paddingHorizontal: Spacing.sm, paddingVertical: 3,
+  },
+  refreshButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
+
+  generateButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.sm, borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md + 2, marginBottom: Spacing.md,
+  },
+  generateButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
+
+  buttonDisabled: { opacity: 0.45 },
 
   goalsList: { gap: Spacing.sm },
   goalCard: {
