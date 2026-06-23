@@ -1,8 +1,21 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LightColors, DarkColors, ColorScheme } from '@/lib/constants';
 
 const THEME_KEY = 'app_theme_preference';
+
+function loadTheme(): boolean {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'dark';
+  } catch {
+    return false;
+  }
+}
+
+function saveTheme(isDark: boolean) {
+  try {
+    localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
+  } catch {}
+}
 
 interface ThemeContextType {
   colors: ColorScheme;
@@ -17,19 +30,16 @@ const ThemeContext = createContext<ThemeContextType>({
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Default to light mode; load persisted preference on mount
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem(THEME_KEY).then((val) => {
-      if (val === 'dark') setIsDark(true);
-    });
+    setIsDark(loadTheme());
   }, []);
 
   function toggleTheme() {
     setIsDark((prev) => {
       const next = !prev;
-      AsyncStorage.setItem(THEME_KEY, next ? 'dark' : 'light');
+      saveTheme(next);
       return next;
     });
   }
