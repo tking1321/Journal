@@ -52,14 +52,12 @@ export interface OnboardingPlanResult {
 async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const { data: { session } } = await supabase.auth.getSession();
 
+  // Use text/plain + token-in-body to avoid CORS preflight (no custom request headers).
+  // Edge function reads the token from the _token field in the JSON payload.
   const response = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${session?.access_token ?? ''}`,
-      'apikey': supabaseAnonKey,
-    },
-    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ ...body, _token: session?.access_token ?? '' }),
   });
 
   const data = await response.json();

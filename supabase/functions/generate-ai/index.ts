@@ -123,15 +123,18 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.error("[generate-ai] Missing or malformed Authorization header");
+    const body = await req.json();
+    const { type, _token } = body;
+
+    const authToken = (_token as string | undefined) || req.headers.get("Authorization")?.replace("Bearer ", "") || "";
+    if (!authToken) {
+      console.error("[generate-ai] Missing auth token");
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.slice(7));
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken);
     if (authError || !user) {
       console.error("[generate-ai] Auth failed:", authError?.message ?? "no user");
       return new Response(JSON.stringify({ error: "Authentication required" }), {
@@ -139,9 +142,6 @@ Deno.serve(async (req: Request) => {
       });
     }
     userId = user.id;
-
-    const body = await req.json();
-    const { type } = body;
     const today = new Date().toISOString().split("T")[0];
 
     console.log(`[generate-ai] user=${userId} type=${type}`);
