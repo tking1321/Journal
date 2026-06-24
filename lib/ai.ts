@@ -1,5 +1,8 @@
 import { supabase } from './supabase';
 
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+
 export type AiRequestType =
   | 'daily_goals'
   | 'journal_insight'
@@ -50,25 +53,28 @@ export interface OnboardingPlanResult {
 
 // Throws an Error with the actual message from the edge function on failure.
 async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data, error } = await supabase.functions.invoke('generate-ai', { body });
+  const { data: { session } } = await supabase.auth.getSession();
 
-  if (error) {
-    let detail = error.message;
-    try {
-      const ctx = (error as unknown as { context?: Response }).context;
-      if (ctx && typeof ctx.json === 'function') {
-        const parsed = await ctx.json();
-        detail = parsed?.error ?? JSON.stringify(parsed);
-      }
-    } catch {
-      // context not parseable — use the generic message
-    }
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/generate-ai`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session?.access_token ?? ''}`,
+      'apikey': SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const detail = data?.error ?? `HTTP ${response.status}`;
     console.error('[AI] edge function error:', detail);
     throw new Error(detail);
   }
 
   if (data && typeof data === 'object' && 'error' in data) {
-    const detail = String((data as Record<string, unknown>).error);
+    const detail = String(data.error);
     console.error('[AI] edge function returned error field:', detail);
     throw new Error(detail);
   }
