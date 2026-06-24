@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, RefreshControl, Modal, ActivityIndicator } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
-import { generateJournalInsight } from '@/lib/ai';
+import { generateJournalInsight, JournalInsightResult } from '@/lib/ai';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
@@ -34,6 +34,12 @@ export default function JournalScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [prompt] = useState(() => PROMPTS[Math.floor(Math.random() * PROMPTS.length)]);
 
+  // Insight modal state
+  const [insightVisible, setInsightVisible] = useState(false);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightData, setInsightData] = useState<JournalInsightResult | null>(null);
+  const [insightError, setInsightError] = useState<string | null>(null);
+
   const today = new Date().toISOString().split('T')[0];
 
   const loadEntries = useCallback(async () => {
@@ -62,15 +68,20 @@ export default function JournalScreen() {
 
     setEntries((prev) => [savedEntry, ...prev]);
     const savedContent = content.trim();
+    const entriesForAi = entries.slice(0, 2).map(e => ({ content: e.content }));
     setContent('');
     setIsWriting(false);
     setSaving(false);
 
-    // One AI call after save — no retry, no loop
-    const recentForAi = entries.slice(0, 2).map(e => ({ content: e.content }));
-    const aiResult = await generateJournalInsight({
+    // Open modal immediately in loading state, then populate when AI responds
+    setInsightData(null);
+    setInsightError(null);
+    setInsightLoading(true);
+    setInsightVisible(true);
+
+    const { result, error: aiError } = await generateJournalInsight({
       content: savedContent,
-      recentEntries: recentForAi,
+      recentEntries: entriesForAi,
       profile: {
         coaching_style: profile?.coaching_style,
         user_level: profile?.user_level,
@@ -78,10 +89,14 @@ export default function JournalScreen() {
       },
     });
 
-    if (aiResult && (aiResult.summary || aiResult.reflection)) {
-      const aiSummary = aiResult.summary || null;
-      const aiReflection = aiResult.reflection || null;
-      const aiNextFocus = aiResult.next_focus || aiResult.action_step || null;
+    setInsightLoading(false);
+
+    if (result && (result.summary || result.reflection)) {
+      setInsightData(result);
+
+      const aiSummary = result.summary || null;
+      const aiReflection = result.reflection || null;
+      const aiNextFocus = result.next_focus || result.action_step || null;
 
       await supabase.from('journal_entries')
         .update({ ai_summary: aiSummary, ai_reflection: aiReflection, ai_next_focus: aiNextFocus })
@@ -92,6 +107,8 @@ export default function JournalScreen() {
           ? { ...e, ai_summary: aiSummary, ai_reflection: aiReflection, ai_next_focus: aiNextFocus }
           : e
       ));
+    } else {
+      setInsightError(aiError ?? 'Could not generate insight. Please try again later.');
     }
   }
 
@@ -201,6 +218,70 @@ export default function JournalScreen() {
           <Feather name="plus" size={22} color={colors.textInverse} />
         </Pressable>
       )}
+
+      {/* AI Insight Modal */}
+      <Modal
+        visible={insightVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !insightLoading && setInsightVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalSheet, { backgroundColor: colors.surface }]}>
+            <View style={[styles.modalHandle, { backgroundColor: colors.borderLight }]} />
+
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconBadge, { backgroundColor: colors.primary + '18' }]}>
+                <Feather name="cpu" size={18} color={colors.primary} />
+              </View>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Your AI Insight</Text>
+            </View>
+
+            {insightLoading ? (
+              <View style={styles.loadingBlock}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Reflecting on your entry...</Text>
+              </View>
+            ) : insightError ? (
+              <View style={styles.errorBlock}>
+                <Feather name="alert-circle" size={22} color={colors.error} />
+                <Text style={[styles.errorText, { color: colors.textSecondary }]}>{insightError}</Text>
+              </View>
+            ) : insightData ? (
+              <View style={styles.insightContent}>
+                {insightData.summary ? (
+                  <View style={[styles.insightSection, { borderBottomColor: colors.borderLight }]}>
+                    <Text style={[styles.insightSectionLabel, { color: colors.textTertiary }]}>INSIGHT</Text>
+                    <Text style={[styles.insightSectionText, { color: colors.text }]}>{insightData.summary}</Text>
+                  </View>
+                ) : null}
+                {insightData.reflection ? (
+                  <View style={[styles.insightSection, { borderBottomColor: colors.borderLight }]}>
+                    <Text style={[styles.insightSectionLabel, { color: colors.textTertiary }]}>COACHING</Text>
+                    <Text style={[styles.insightSectionText, { color: colors.text }]}>{insightData.reflection}</Text>
+                  </View>
+                ) : null}
+                {(insightData.next_focus || insightData.action_step) ? (
+                  <View style={[styles.insightSection, { borderBottomColor: 'transparent' }]}>
+                    <Text style={[styles.insightSectionLabel, { color: colors.textTertiary }]}>NEXT FOCUS</Text>
+                    <Text style={[styles.insightSectionText, { color: colors.text }]}>
+                      {insightData.next_focus || insightData.action_step}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+
+            <Pressable
+              style={[styles.modalDoneButton, { backgroundColor: colors.primary }, insightLoading && styles.disabled]}
+              onPress={() => setInsightVisible(false)}
+              disabled={insightLoading}
+            >
+              <Text style={[styles.modalDoneText, { color: colors.textInverse }]}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -260,4 +341,49 @@ const styles = StyleSheet.create({
     borderRadius: 26, justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8, elevation: 8,
   },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 40,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 20,
+  },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg,
+  },
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginBottom: Spacing.xl,
+  },
+  modalIconBadge: {
+    width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center',
+  },
+  modalTitle: { fontFamily: 'Inter-Bold', fontSize: FontSize.lg },
+  loadingBlock: {
+    alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xxl,
+  },
+  loadingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm },
+  errorBlock: {
+    alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xl,
+  },
+  errorText: {
+    fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center', lineHeight: 20,
+  },
+  insightContent: { marginBottom: Spacing.lg },
+  insightSection: {
+    paddingVertical: Spacing.md, borderBottomWidth: 1,
+  },
+  insightSectionLabel: {
+    fontFamily: 'Inter-Bold', fontSize: 10, letterSpacing: 1, marginBottom: 6,
+  },
+  insightSectionText: {
+    fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 24,
+  },
+  modalDoneButton: {
+    marginTop: Spacing.md, paddingVertical: 14, borderRadius: BorderRadius.md,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  modalDoneText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
 });

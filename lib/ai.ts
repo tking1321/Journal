@@ -1,8 +1,5 @@
 import { supabase } from './supabase';
 
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-
 export type AiRequestType =
   | 'daily_goals'
   | 'journal_insight'
@@ -53,28 +50,26 @@ export interface OnboardingPlanResult {
 
 // Throws an Error with the actual message from the edge function on failure.
 async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data, error } = await supabase.functions.invoke('generate-ai', { body });
 
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/generate-ai`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${session?.access_token ?? ''}`,
-      'apikey': SUPABASE_ANON_KEY,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    const detail = data?.error ?? `HTTP ${response.status}`;
-    console.error('[AI] edge function error:', detail);
-    throw new Error(detail);
+  if (error) {
+    // FunctionsHttpError has a context with the response body
+    if (error.context && typeof error.context.json === 'function') {
+      try {
+        const errBody = await error.context.json();
+        const detail = errBody?.error ?? error.message;
+        console.error('[AI] edge function http error:', detail);
+        throw new Error(detail);
+      } catch (parseErr) {
+        if (parseErr instanceof Error && parseErr.message !== error.message) throw parseErr;
+      }
+    }
+    console.error('[AI] edge function error:', error.message);
+    throw new Error(error.message);
   }
 
   if (data && typeof data === 'object' && 'error' in data) {
-    const detail = String(data.error);
+    const detail = String((data as Record<string, unknown>).error);
     console.error('[AI] edge function returned error field:', detail);
     throw new Error(detail);
   }
@@ -124,20 +119,22 @@ export async function refreshDailyGoals(params: {
   }
 }
 
+// Returns { result, error } so callers can surface the actual error to the user.
 export async function generateJournalInsight(params: {
   content: string;
   recentEntries: Array<{ content: string; entry_date?: string }>;
   profile: AiProfile;
-}): Promise<JournalInsightResult | null> {
+}): Promise<{ result: JournalInsightResult | null; error: string | null }> {
   try {
-    return (await callAI({
+    const result = (await callAI({
       type: 'journal_insight',
       content: params.content,
       recentEntries: params.recentEntries,
       profile: params.profile,
     })) as JournalInsightResult;
-  } catch {
-    return null;
+    return { result, error: null };
+  } catch (err) {
+    return { result: null, error: err instanceof Error ? err.message : 'Unknown error' };
   }
 }
 
