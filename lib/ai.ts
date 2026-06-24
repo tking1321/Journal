@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
 
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
+
 export type AiRequestType =
   | 'daily_goals'
   | 'journal_insight'
@@ -53,8 +55,7 @@ async function callAI(body: Record<string, unknown>): Promise<Record<string, unk
   const token = session?.access_token;
   if (!token) return null;
 
-  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-  const response = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/generate-ai`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
