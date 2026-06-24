@@ -48,20 +48,32 @@ export interface OnboardingPlanResult {
   motivation_note: string;
 }
 
-async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+// Throws an Error with the actual message from the edge function on failure.
+async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const { data, error } = await supabase.functions.invoke('generate-ai', { body });
 
   if (error) {
-    console.warn('AI request failed:', error.message);
-    return null;
+    let detail = error.message;
+    try {
+      const ctx = (error as unknown as { context?: Response }).context;
+      if (ctx && typeof ctx.json === 'function') {
+        const parsed = await ctx.json();
+        detail = parsed?.error ?? JSON.stringify(parsed);
+      }
+    } catch {
+      // context not parseable — use the generic message
+    }
+    console.error('[AI] edge function error:', detail);
+    throw new Error(detail);
   }
 
   if (data && typeof data === 'object' && 'error' in data) {
-    console.warn('AI returned error:', (data as Record<string, unknown>).error);
-    return null;
+    const detail = String((data as Record<string, unknown>).error);
+    console.error('[AI] edge function returned error field:', detail);
+    throw new Error(detail);
   }
 
-  return data as Record<string, unknown> | null;
+  return data as Record<string, unknown>;
 }
 
 export async function generateDailyGoals(params: {
@@ -71,15 +83,18 @@ export async function generateDailyGoals(params: {
   streakData: { current_streak: number; longest_streak: number } | null;
   profile: AiProfile;
 }): Promise<DailyGoalsResult | null> {
-  const result = await callAI({
-    type: 'daily_goals',
-    categories: params.categories,
-    recentEntries: params.recentEntries,
-    previousGoals: params.previousGoals,
-    streakData: params.streakData,
-    profile: params.profile,
-  });
-  return result as DailyGoalsResult | null;
+  try {
+    return (await callAI({
+      type: 'daily_goals',
+      categories: params.categories,
+      recentEntries: params.recentEntries,
+      previousGoals: params.previousGoals,
+      streakData: params.streakData,
+      profile: params.profile,
+    })) as DailyGoalsResult;
+  } catch {
+    return null;
+  }
 }
 
 export async function refreshDailyGoals(params: {
@@ -89,15 +104,18 @@ export async function refreshDailyGoals(params: {
   streakData: { current_streak: number; longest_streak: number } | null;
   profile: AiProfile;
 }): Promise<DailyGoalsResult | null> {
-  const result = await callAI({
-    type: 'manual_refresh',
-    categories: params.categories,
-    recentEntries: params.recentEntries,
-    previousGoals: params.previousGoals,
-    streakData: params.streakData,
-    profile: params.profile,
-  });
-  return result as DailyGoalsResult | null;
+  try {
+    return (await callAI({
+      type: 'manual_refresh',
+      categories: params.categories,
+      recentEntries: params.recentEntries,
+      previousGoals: params.previousGoals,
+      streakData: params.streakData,
+      profile: params.profile,
+    })) as DailyGoalsResult;
+  } catch {
+    return null;
+  }
 }
 
 export async function generateJournalInsight(params: {
@@ -105,35 +123,48 @@ export async function generateJournalInsight(params: {
   recentEntries: Array<{ content: string; entry_date?: string }>;
   profile: AiProfile;
 }): Promise<JournalInsightResult | null> {
-  const result = await callAI({
-    type: 'journal_insight',
-    content: params.content,
-    recentEntries: params.recentEntries,
-    profile: params.profile,
-  });
-  return result as JournalInsightResult | null;
+  try {
+    return (await callAI({
+      type: 'journal_insight',
+      content: params.content,
+      recentEntries: params.recentEntries,
+      profile: params.profile,
+    })) as JournalInsightResult;
+  } catch {
+    return null;
+  }
 }
 
+// Returns { result, error } so callers can surface the actual error to the user.
 export async function generateTodayCoaching(params: {
   recentEntries: Array<{ content: string; entry_date?: string }>;
   profile: AiProfile;
-}): Promise<TodayCoachingResult | null> {
-  const result = await callAI({
-    type: 'today_coaching',
-    recentEntries: params.recentEntries,
-    profile: params.profile,
-  });
-  return result as TodayCoachingResult | null;
+}): Promise<{ result: TodayCoachingResult | null; error: string | null }> {
+  try {
+    const result = (await callAI({
+      type: 'today_coaching',
+      recentEntries: params.recentEntries,
+      profile: params.profile,
+    })) as TodayCoachingResult;
+    return { result, error: null };
+  } catch (err) {
+    return { result: null, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
 }
 
+// Returns { result, error } so callers can surface the actual error to the user.
 export async function generateOnboardingPlan(params: {
   categories: Array<{ name: string; growth_description?: string | null }>;
   profile: AiProfile;
-}): Promise<OnboardingPlanResult | null> {
-  const result = await callAI({
-    type: 'onboarding_plan',
-    categories: params.categories,
-    profile: params.profile,
-  });
-  return result as OnboardingPlanResult | null;
+}): Promise<{ result: OnboardingPlanResult | null; error: string | null }> {
+  try {
+    const result = (await callAI({
+      type: 'onboarding_plan',
+      categories: params.categories,
+      profile: params.profile,
+    })) as OnboardingPlanResult;
+    return { result, error: null };
+  } catch (err) {
+    return { result: null, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
 }

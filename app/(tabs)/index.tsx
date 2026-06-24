@@ -348,7 +348,7 @@ export default function TodayScreen() {
 
     setCoachingLoading(true);
     try {
-      const result = await generateTodayCoaching({
+      const { result, error: aiError } = await generateTodayCoaching({
         recentEntries,
         profile: {
           coaching_style: profile?.coaching_style,
@@ -362,7 +362,7 @@ export default function TodayScreen() {
         if (result.next_focus) setNextFocus(result.next_focus);
         if (result.insight) setAiInsight(result.insight);
       } else {
-        setCoachNote('Take one step forward today. That is enough.');
+        setCoachNote(`AI error: ${aiError ?? 'unknown error'}`);
       }
     } finally {
       setCoachingLoading(false);

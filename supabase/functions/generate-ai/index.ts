@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const MODEL = "gpt-4o-mini";
+const MODEL = "gpt-5.4-mini";
 
 const SYSTEM_PROMPT = `You are an AI self-improvement coach inside a journaling and growth app.
 You are calm, concise, supportive, and highly personalized.
@@ -57,7 +57,6 @@ Generate exactly ${goalCount} personalized daily goals. Rules:
 - Medium: moderate focus, 15-30 min (xp: 10)
 - Hard: stretches comfort zone, 30+ min (xp: 20)
 - Each goal must be specific and doable today
-- Use max 3 easy, 2 medium, 1 hard distribution
 
 Return ONLY this JSON:
 {"title":"motivational title for today","daily_goals":[{"text":"specific goal","difficulty":"easy","xp":5,"categoryName":"exact category name"}],"coach_note":"one coaching sentence max 25 words","insight":"one brief observation"}`;
@@ -118,40 +117,50 @@ Deno.serve(async (req: Request) => {
   try {
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiKey) {
+      console.error("[generate-ai] OPENAI_API_KEY secret is not set");
       return new Response(JSON.stringify({ error: "OPENAI_API_KEY not configured" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const authHeader = req.headers.get("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      const { data: { user } } = await supabase.auth.getUser(authHeader.slice(7));
-      userId = user?.id ?? null;
-    }
-
-    if (!userId) {
+    if (!authHeader?.startsWith("Bearer ")) {
+      console.error("[generate-ai] Missing or malformed Authorization header");
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.slice(7));
+    if (authError || !user) {
+      console.error("[generate-ai] Auth failed:", authError?.message ?? "no user");
+      return new Response(JSON.stringify({ error: "Authentication required" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    userId = user.id;
+
     const body = await req.json();
     const { type } = body;
     const today = new Date().toISOString().split("T")[0];
 
-    const { data: prof } = await supabase
+    console.log(`[generate-ai] user=${userId} type=${type}`);
+
+    const { data: prof, error: profError } = await supabase
       .from("profiles")
       .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date, last_coaching_generation_date")
       .eq("id", userId)
       .maybeSingle();
 
-    if (!prof) {
+    if (profError || !prof) {
+      console.error("[generate-ai] Profile fetch error:", profError?.message ?? "not found");
       return new Response(JSON.stringify({ error: "Profile not found" }), {
         status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (prof.ai_request_lock) {
+      console.log("[generate-ai] Lock active, rejecting duplicate request");
       return new Response(JSON.stringify({ error: "Request already in progress" }), {
         status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -167,6 +176,7 @@ Deno.serve(async (req: Request) => {
         prof.last_ai_response_json &&
         validateResponse(type, prof.last_ai_response_json as Record<string, unknown>)
       ) {
+        console.log(`[generate-ai] Returning cached response for type=${type}`);
         return new Response(JSON.stringify(prof.last_ai_response_json), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -179,6 +189,8 @@ Deno.serve(async (req: Request) => {
 
     try {
       const userPrompt = buildPrompt(body);
+
+      console.log(`[generate-ai] Calling OpenAI model=${MODEL} type=${type}`);
 
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -199,19 +211,23 @@ Deno.serve(async (req: Request) => {
 
       if (!response.ok) {
         const errText = await response.text();
+        console.error(`[generate-ai] OpenAI error status=${response.status}:`, errText);
         throw new Error(`OpenAI error (${response.status}): ${errText}`);
       }
 
-      const data = await response.json();
-      const outputText = data?.choices?.[0]?.message?.content;
+      const openaiData = await response.json();
+      const outputText = openaiData?.choices?.[0]?.message?.content;
 
       if (!outputText) {
+        console.error("[generate-ai] No content in OpenAI response:", JSON.stringify(openaiData));
         throw new Error("No content in OpenAI response");
       }
 
+      console.log(`[generate-ai] OpenAI response received, parsing JSON`);
       result = JSON.parse(outputText);
 
       if (!validateResponse(type, result)) {
+        console.error(`[generate-ai] Validation failed for type=${type}:`, JSON.stringify(result));
         throw new Error(`AI response failed validation for type: ${type}`);
       }
 
@@ -231,6 +247,7 @@ Deno.serve(async (req: Request) => {
       if (dateField) profileUpdate[dateField] = today;
 
       await supabase.from("profiles").update(profileUpdate).eq("id", userId);
+      console.log(`[generate-ai] Success type=${type}`);
 
     } catch (innerErr) {
       await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
@@ -242,11 +259,13 @@ Deno.serve(async (req: Request) => {
     });
 
   } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[generate-ai] Unhandled error:", msg);
     if (userId) {
       await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
     }
     return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error" }),
+      JSON.stringify({ error: msg }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

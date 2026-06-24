@@ -41,7 +41,7 @@ export default function PreviewScreen() {
     setPlanError(null);
 
     try {
-      const result = await generateOnboardingPlan({
+      const { result, error: aiError } = await generateOnboardingPlan({
         categories: data.categories.map((c) => ({
           name: c.name,
           growth_description: c.growthDescription,
@@ -66,7 +66,7 @@ export default function PreviewScreen() {
         });
         setPlanGenerated(true);
       } else {
-        setPlanError('Could not generate your plan. Please try again.');
+        setPlanError(aiError ?? 'Could not generate your plan. Please try again.');
       }
     } finally {
       setPlanLoading(false);
