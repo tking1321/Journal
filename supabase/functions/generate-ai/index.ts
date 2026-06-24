@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const MODEL = "gpt-5.4-mini";
+const MODEL = "gpt-4o-mini";
 
 const SYSTEM_PROMPT = `You are an AI self-improvement coach inside a journaling and growth app.
 You are calm, concise, supportive, and highly personalized.
@@ -148,7 +148,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: prof, error: profError } = await supabase
       .from("profiles")
-      .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date, last_coaching_generation_date")
+      .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_ai_response_at, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date, last_coaching_generation_date")
       .eq("id", userId)
       .maybeSingle();
 
@@ -160,10 +160,18 @@ Deno.serve(async (req: Request) => {
     }
 
     if (prof.ai_request_lock) {
-      console.log("[generate-ai] Lock active, rejecting duplicate request");
-      return new Response(JSON.stringify({ error: "Request already in progress" }), {
-        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      // Auto-expire stale locks (left over from timed-out runs) older than 2 minutes.
+      const lastResponse = (prof as Record<string, unknown>).last_ai_response_at as string | null;
+      const lockIsStale = !lastResponse || (Date.now() - new Date(lastResponse).getTime() > 2 * 60 * 1000);
+      if (lockIsStale) {
+        console.log("[generate-ai] Stale lock detected, auto-releasing");
+        await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId);
+      } else {
+        console.log("[generate-ai] Lock active, rejecting duplicate request");
+        return new Response(JSON.stringify({ error: "Request already in progress" }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Return cached result for today if valid (manual_refresh bypasses cache)
