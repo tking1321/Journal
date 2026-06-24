@@ -67,11 +67,10 @@ export default function JournalScreen() {
     setSaving(false);
 
     // One AI call after save — no retry, no loop
-    const recentEntries = entries.slice(0, 2).map(e => ({ content: e.content }));
+    const recentForAi = entries.slice(0, 2).map(e => ({ content: e.content }));
     const aiResult = await generateJournalInsight({
-      userId: user.id,
       content: savedContent,
-      recentEntries,
+      recentEntries: recentForAi,
       profile: {
         coaching_style: profile?.coaching_style,
         user_level: profile?.user_level,
@@ -82,7 +81,7 @@ export default function JournalScreen() {
     if (aiResult && (aiResult.summary || aiResult.reflection)) {
       const aiSummary = aiResult.summary || null;
       const aiReflection = aiResult.reflection || null;
-      const aiNextFocus = aiResult.next_focus || null;
+      const aiNextFocus = aiResult.next_focus || aiResult.action_step || null;
 
       await supabase.from('journal_entries')
         .update({ ai_summary: aiSummary, ai_reflection: aiReflection, ai_next_focus: aiNextFocus })

@@ -1,5 +1,13 @@
 import { supabase } from './supabase';
 
+export type AiRequestType =
+  | 'daily_goals'
+  | 'journal_insight'
+  | 'today_coaching'
+  | 'onboarding_plan'
+  | 'manual_refresh'
+  | 'journal_completion_insight';
+
 export interface AiProfile {
   coaching_style?: string | null;
   journaling_style?: string | null;
@@ -11,156 +19,135 @@ export interface AiProfile {
   daily_goal_limit?: number;
 }
 
-export interface AiResult {
+export interface DailyGoalsResult {
   title: string;
+  daily_goals: Array<{ text: string; difficulty: string; xp: number; categoryName: string }>;
+  coach_note: string;
+  insight: string;
+}
+
+export interface JournalInsightResult {
   summary: string;
-  goals: Array<{ title: string; text: string; description: string; categoryName: string; difficulty: string; xp: number }>;
   reflection: string;
+  next_focus: string;
+  action_step: string;
+}
+
+export interface TodayCoachingResult {
+  coach_note: string;
   next_focus: string;
   insight: string;
 }
 
-async function callEdgeFunction(body: Record<string, unknown>): Promise<AiResult> {
+export interface OnboardingPlanResult {
+  plan_title: string;
+  summary: string;
+  categories: string[];
+  daily_routine: string[];
+  first_week_focus: string[];
+  motivation_note: string;
+}
+
+async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
+  if (!token) return null;
 
   const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
   const response = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Edge function error: ${err}`);
+    const text = await response.text();
+    console.warn(`AI request failed (${response.status}):`, text);
+    return null;
   }
 
-  const result = await response.json() as AiResult;
-
+  const result = await response.json();
   if (result && typeof result === 'object' && 'error' in result) {
-    throw new Error(String((result as any).error));
-  }
-
-  if (Array.isArray(result.goals)) {
-    result.goals = result.goals.map((g: any) => ({
-      ...g,
-      title: g.title || g.text || '',
-      text: g.text || g.title || '',
-    }));
+    console.warn('AI returned error:', result.error);
+    return null;
   }
 
   return result;
 }
 
-export async function generateGoals(params: {
-  userId: string;
+export async function generateDailyGoals(params: {
   categories: Array<{ name: string; growth_description: string | null }>;
   recentEntries: Array<{ content: string; entry_date: string }>;
   previousGoals: Array<{ title: string; completed: boolean; difficulty: string }>;
   streakData: { current_streak: number; longest_streak: number } | null;
   profile: AiProfile;
-  today: string;
-}): Promise<AiResult | null> {
-  const { categories, recentEntries, previousGoals, streakData, profile } = params;
-  try {
-    return await callEdgeFunction({
-      type: 'goals',
-      categories,
-      recentEntries,
-      previousGoals,
-      streakData,
-      profile,
-      dailyGoalLimit: profile.daily_goal_limit || 3,
-    });
-  } catch (err) {
-    console.warn('AI goal generation failed:', err);
-    return null;
-  }
+}): Promise<DailyGoalsResult | null> {
+  const result = await callAI({
+    type: 'daily_goals',
+    categories: params.categories,
+    recentEntries: params.recentEntries,
+    previousGoals: params.previousGoals,
+    streakData: params.streakData,
+    profile: params.profile,
+  });
+  return result as DailyGoalsResult | null;
+}
+
+export async function refreshDailyGoals(params: {
+  categories: Array<{ name: string; growth_description: string | null }>;
+  recentEntries: Array<{ content: string; entry_date: string }>;
+  previousGoals: Array<{ title: string; completed: boolean; difficulty: string }>;
+  streakData: { current_streak: number; longest_streak: number } | null;
+  profile: AiProfile;
+}): Promise<DailyGoalsResult | null> {
+  const result = await callAI({
+    type: 'manual_refresh',
+    categories: params.categories,
+    recentEntries: params.recentEntries,
+    previousGoals: params.previousGoals,
+    streakData: params.streakData,
+    profile: params.profile,
+  });
+  return result as DailyGoalsResult | null;
 }
 
 export async function generateJournalInsight(params: {
-  userId: string;
   content: string;
-  recentEntries: Array<{ content: string }>;
+  recentEntries: Array<{ content: string; entry_date?: string }>;
   profile: AiProfile;
-}): Promise<AiResult | null> {
-  const { content, recentEntries, profile } = params;
-  try {
-    return await callEdgeFunction({
-      type: 'journal_summary',
-      content,
-      recentEntries,
-      profile,
-    });
-  } catch (err) {
-    console.warn('AI journal insight failed:', err);
-    return null;
-  }
+}): Promise<JournalInsightResult | null> {
+  const result = await callAI({
+    type: 'journal_insight',
+    content: params.content,
+    recentEntries: params.recentEntries,
+    profile: params.profile,
+  });
+  return result as JournalInsightResult | null;
 }
 
-export async function generateDailyInsight(params: {
-  userId: string;
-  recentEntries: Array<{ content: string }>;
+export async function generateTodayCoaching(params: {
+  recentEntries: Array<{ content: string; entry_date?: string }>;
   profile: AiProfile;
-  today: string;
-}): Promise<AiResult | null> {
-  const { recentEntries, profile } = params;
-  try {
-    return await callEdgeFunction({
-      type: 'reflection',
-      recentEntries,
-      profile,
-    });
-  } catch (err) {
-    console.warn('AI daily insight failed:', err);
-    return null;
-  }
-}
-
-export async function generateWeeklySummary(params: {
-  userId: string;
-  entries: Array<{ content: string; entry_date: string }>;
-  goalsCompleted: number;
-  totalGoals: number;
-  profile: AiProfile;
-  streakData: { current_streak: number; longest_streak: number } | null;
-  today: string;
-}): Promise<AiResult | null> {
-  const { entries, goalsCompleted, totalGoals, profile, streakData } = params;
-  try {
-    return await callEdgeFunction({
-      type: 'weekly_summary',
-      entries,
-      goalsCompleted,
-      totalGoals,
-      profile,
-      streakData,
-    });
-  } catch (err) {
-    console.warn('AI weekly summary failed:', err);
-    return null;
-  }
+}): Promise<TodayCoachingResult | null> {
+  const result = await callAI({
+    type: 'today_coaching',
+    recentEntries: params.recentEntries,
+    profile: params.profile,
+  });
+  return result as TodayCoachingResult | null;
 }
 
 export async function generateOnboardingPlan(params: {
-  userId: string;
   categories: Array<{ name: string; growth_description?: string | null }>;
   profile: AiProfile;
-  today: string;
-}): Promise<AiResult | null> {
-  const { categories, profile } = params;
-  try {
-    return await callEdgeFunction({
-      type: 'onboarding_plan',
-      categories,
-      profile,
-    });
-  } catch (err) {
-    console.warn('AI onboarding plan failed:', err);
-    return null;
-  }
+}): Promise<OnboardingPlanResult | null> {
+  const result = await callAI({
+    type: 'onboarding_plan',
+    categories: params.categories,
+    profile: params.profile,
+  });
+  return result as OnboardingPlanResult | null;
 }

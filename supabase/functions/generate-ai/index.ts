@@ -7,59 +7,25 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const MODEL = "gpt-4o-mini";
-const MAX_TOKENS = 900;
+const MODEL = "gpt-5.4-mini";
 
-const SYSTEM_PROMPT = `You are an AI coach for a self-improvement journaling app. Be concise, supportive, specific, and actionable. Return only the requested JSON with no extra text or markdown.`;
+const SYSTEM_INSTRUCTIONS = `You are an AI self-improvement coach inside a journaling and growth app.
+You are calm, concise, supportive, and highly personalized.
+Return only valid JSON in the exact schema requested.
+Do not add commentary.
+Do not add extra fields.
+Do not explain your reasoning.
+Do not mention policies or limitations.`;
 
-const LEVEL_THRESHOLDS = [0, 20, 40, 65, 95, 130, 170];
-
-function getThresholdForLevel(level: number): number {
-  if (level <= LEVEL_THRESHOLDS.length) return LEVEL_THRESHOLDS[level - 1];
-  const lastBase = LEVEL_THRESHOLDS[LEVEL_THRESHOLDS.length - 1];
-  let sum = lastBase;
-  const extra = level - LEVEL_THRESHOLDS.length;
-  for (let i = 0; i < extra; i++) {
-    sum += 40 + (LEVEL_THRESHOLDS.length + i) * 5;
-  }
-  return sum;
-}
-
-function getXpInCurrentLevel(totalXp: number, level: number): number {
-  return totalXp - getThresholdForLevel(level);
-}
-
-function getXpForNextLevel(level: number): number {
-  return getThresholdForLevel(level + 1) - getThresholdForLevel(level);
-}
-
-const GOAL_DISTRIBUTIONS: Record<number, Array<{ difficulty: string; xp: number }>> = {
-  3: [{ difficulty: "easy", xp: 5 }, { difficulty: "medium", xp: 10 }, { difficulty: "hard", xp: 20 }],
-  4: [{ difficulty: "easy", xp: 5 }, { difficulty: "easy", xp: 5 }, { difficulty: "medium", xp: 10 }, { difficulty: "hard", xp: 20 }],
-  5: [{ difficulty: "easy", xp: 5 }, { difficulty: "easy", xp: 5 }, { difficulty: "medium", xp: 10 }, { difficulty: "medium", xp: 10 }, { difficulty: "hard", xp: 20 }],
-  6: [{ difficulty: "easy", xp: 5 }, { difficulty: "easy", xp: 5 }, { difficulty: "easy", xp: 5 }, { difficulty: "medium", xp: 10 }, { difficulty: "medium", xp: 10 }, { difficulty: "hard", xp: 20 }],
-};
-
-function buildCoachVoice(coachingStyle: string | undefined): string {
-  const voiceMap: Record<string, string> = {
-    "strict coach": "Direct, no-nonsense, demanding. Expects results.",
-    "gentle coach": "Warm, encouraging, compassionate. Believes in the user.",
-    "reflective prompts": "Socratic, asks powerful questions, illuminates rather than prescribes.",
-    "accountability": "Results-obsessed, tracks commitments, celebrates follow-through.",
-    "direct action": "Pragmatic, gives concrete next steps only.",
-  };
-  return voiceMap[coachingStyle || "gentle coach"] || voiceMap["gentle coach"];
-}
-
-function buildUserPrompt(params: {
+function buildUserInput(params: {
   type: string;
-  categories?: Array<{ name: string; growth_description?: string }>;
+  categories?: Array<{ name: string; growth_description?: string | null }>;
   recentEntries?: Array<{ content: string; entry_date?: string }>;
   profile?: {
-    coaching_style?: string;
-    journaling_style?: string;
-    biggest_obstacle?: string;
-    success_vision?: string;
+    coaching_style?: string | null;
+    journaling_style?: string | null;
+    biggest_obstacle?: string | null;
+    success_vision?: string | null;
     user_level?: number;
     current_xp?: number;
     total_xp_earned?: number;
@@ -67,180 +33,150 @@ function buildUserPrompt(params: {
   };
   previousGoals?: Array<{ title: string; completed: boolean; difficulty: string }>;
   streakData?: { current_streak: number; longest_streak: number } | null;
-  dailyGoalLimit?: number;
   content?: string;
   entries?: Array<{ content: string; entry_date: string }>;
   goalsCompleted?: number;
   totalGoals?: number;
 }): string {
-  const { type, categories, recentEntries, profile, previousGoals, streakData, dailyGoalLimit, content, entries, goalsCompleted, totalGoals } = params;
+  const { type, categories, recentEntries, profile, previousGoals, streakData, content, entries, goalsCompleted, totalGoals } = params;
 
-  const goalCount = dailyGoalLimit || profile?.daily_goal_limit || 3;
-  const distribution = GOAL_DISTRIBUTIONS[goalCount] || GOAL_DISTRIBUTIONS[3];
-  const coachVoice = buildCoachVoice(profile?.coaching_style);
-  const level = profile?.user_level || 1;
-  const totalXp = profile?.total_xp_earned || 0;
-  const xpInLevel = getXpInCurrentLevel(totalXp, level);
-  const xpNeeded = getXpForNextLevel(level);
+  const goalCount = profile?.daily_goal_limit || 3;
 
-  const baseContext = `Coach voice: ${coachVoice}
-User profile:
+  const context = `USER CONTEXT:
 - Coaching style: ${profile?.coaching_style || "gentle coach"}
 - Journaling style: ${profile?.journaling_style || "freeform"}
 - Biggest obstacle: ${profile?.biggest_obstacle || "building consistent habits"}
 - 30-day vision: ${profile?.success_vision || "become more disciplined"}
-- Current level: ${level} (${xpInLevel}/${xpNeeded} XP to next level)
-- Daily goal limit: ${goalCount}`;
+- Current level: ${profile?.user_level || 1}
+- Total XP: ${profile?.total_xp_earned || 0}
+- Daily goal limit: ${goalCount}
+- Streak: ${streakData ? `${streakData.current_streak} days (best: ${streakData.longest_streak})` : "none yet"}
+- Today: ${new Date().toISOString().split("T")[0]}`;
 
-  const streakContext = streakData
-    ? `Streak: ${streakData.current_streak} days current, ${streakData.longest_streak} longest.`
-    : "";
-
-  const prevGoalsContext = (previousGoals || []).slice(0, 8)
-    .map((g) => `${g.completed ? "[DONE]" : "[UNFINISHED]"} (${g.difficulty}) ${g.title}`)
+  const categoriesText = (categories || [])
+    .map((c) => `- ${c.name}: ${c.growth_description || "grow in this area"}`)
     .join("\n");
 
-  const recentContext = (recentEntries || []).slice(0, 3)
-    .map((e) => e.content.slice(0, 200))
-    .join(" | ");
+  const recentText = (recentEntries || []).slice(0, 3)
+    .map((e) => `[${e.entry_date || "recent"}] ${e.content.slice(0, 200)}`)
+    .join("\n");
 
-  if (type === "goals" || type === "daily_goals") {
-    const categoryList = (categories || [])
-      .map((c) => `- ${c.name}: ${c.growth_description || "grow in this area"}`)
-      .join("\n");
+  const prevGoalsText = (previousGoals || []).slice(0, 8)
+    .map((g) => `${g.completed ? "[DONE]" : "[INCOMPLETE]"} (${g.difficulty}) ${g.title}`)
+    .join("\n");
 
-    const difficultySpec = distribution
-      .map((d) => `- 1 ${d.difficulty} goal (${d.xp} XP)`)
-      .join("\n");
+  if (type === "daily_goals" || type === "manual_refresh") {
+    return `${context}
 
-    return `${baseContext}
+REQUEST: Generate exactly ${goalCount} personalized daily goals.
 
-Request type: daily_goals
-Generate exactly ${goalCount} personalized daily goals.
+CATEGORIES:
+${categoriesText || "No categories set."}
 
-Required difficulty distribution:
-${difficultySpec}
+${recentText ? `RECENT JOURNAL:\n${recentText}` : ""}
+${prevGoalsText ? `\nPREVIOUS GOALS (do not repeat):\n${prevGoalsText}` : ""}
 
-Growth areas:
-${categoryList}
+RULES:
+- Generate exactly ${goalCount} goals
+- Maximum distribution: 3 easy, 2 medium, 1 hard
+- Easy = quick win, 5-10 min (5 XP)
+- Medium = moderate focus, 15-30 min (10 XP)
+- Hard = stretches comfort zone, 30+ min (20 XP)
+- Each goal must be specific, concrete, and doable today
+- Tie goals to the user's categories
 
-${recentContext ? `Recent journal context: ${recentContext}` : ""}
-${prevGoalsContext ? `\nPrevious goals (do NOT duplicate):\n${prevGoalsContext}` : ""}
-${streakContext ? `\n${streakContext}` : ""}
-
-Rules:
-- Easy: simple daily habit, quick win (5-10 min)
-- Medium: moderate effort, requires focus (15-30 min)
-- Hard: challenging, stretches comfort zone (30+ min)
-- Do not repeat titles from previous goals
-- Make every goal specific and tied to their growth areas
-
-Return strict JSON:
+RETURN THIS EXACT JSON SCHEMA:
 {
-  "title": "Today's Focus",
-  "summary": "One sentence about what today is about",
-  "goals": [
-    { "text": "Specific actionable goal", "difficulty": "easy|medium|hard", "xp": 5, "description": "Brief context (1 sentence)", "categoryName": "exact category name" }
+  "title": "short motivational title for today",
+  "daily_goals": [
+    { "text": "specific actionable goal", "difficulty": "easy", "xp": 5, "categoryName": "exact category name" }
   ],
-  "reflection": "One sentence coaching message in their voice",
-  "next_focus": "",
-  "insight": ""
+  "coach_note": "one calm coaching sentence (max 25 words)",
+  "insight": "one brief observation about their pattern or progress"
 }`;
   }
 
-  if (type === "journal_summary" || type === "journal_reflection") {
-    return `${baseContext}
+  if (type === "journal_insight" || type === "journal_completion_insight") {
+    return `${context}
 
-Request type: journal_reflection
-The user just saved this journal entry:
+REQUEST: Provide insight on this journal entry.
+
+ENTRY:
 "${content}"
 
-${recentContext ? `Previous entries context: ${recentContext}` : ""}
+${recentText ? `PREVIOUS ENTRIES:\n${recentText}` : ""}
 
-Return strict JSON:
+RETURN THIS EXACT JSON SCHEMA:
 {
-  "title": "",
-  "summary": "1-sentence insight about the entry",
-  "goals": [],
-  "reflection": "1-sentence coaching message (max 20 words)",
-  "next_focus": "Specific thing to focus on next",
-  "insight": "Perceptive observation about their pattern"
+  "summary": "1-sentence insight about what they wrote",
+  "reflection": "1-sentence coaching thought (max 20 words)",
+  "next_focus": "specific thing to focus on next",
+  "action_step": "one concrete small action they can take today"
 }`;
   }
 
-  if (type === "weekly_summary") {
-    const entriesText = (entries || [])
-      .map((e) => `[${e.entry_date}] ${e.content.slice(0, 150)}`)
-      .join("\n");
-    const completionRate = (totalGoals || 0) > 0
-      ? Math.round(((goalsCompleted || 0) / (totalGoals || 1)) * 100)
-      : 0;
+  if (type === "today_coaching") {
+    return `${context}
 
-    return `${baseContext}
+REQUEST: Write a single daily coaching message.
 
-Request type: weekly_summary
-${streakContext}
+${recentText ? `RECENT JOURNAL:\n${recentText}` : "No recent entries."}
 
-This week's journal entries:
-${entriesText || "No entries this week."}
-
-Stats: ${goalsCompleted}/${totalGoals} goals completed (${completionRate}% rate).
-
-Return strict JSON:
+RETURN THIS EXACT JSON SCHEMA:
 {
-  "title": "Weekly Review",
-  "summary": "2-3 sentence summary of their week",
-  "goals": [],
-  "reflection": "One powerful coaching sentence for next week",
-  "next_focus": "The single most important area to focus on next week",
-  "insight": "One key pattern you notice from their data"
-}`;
-  }
-
-  if (type === "reflection") {
-    return `${baseContext}
-
-Request type: reflection
-${recentContext ? `Recent journal entries: ${recentContext}` : "No recent entries."}
-
-Write a single coaching sentence for today (max 20 words).
-
-Return strict JSON:
-{
-  "title": "",
-  "summary": "",
-  "goals": [],
-  "reflection": "Your coaching message here",
-  "next_focus": "",
+  "coach_note": "one calm, personalized coaching sentence (max 25 words)",
+  "next_focus": "one specific thing to focus on today",
   "insight": ""
 }`;
   }
 
   if (type === "onboarding_plan") {
-    const categoryList = (categories || [])
-      .map((c) => `- ${c.name}: ${c.growth_description || "grow in this area"}`)
-      .join("\n");
+    return `${context}
 
-    return `${baseContext}
+REQUEST: Generate a personalized 30-day growth plan preview.
 
-Request type: onboarding_plan
-The user has just completed onboarding. Generate a personalized 30-day growth plan summary based on their specific answers.
+CATEGORIES:
+${categoriesText}
 
-Growth areas they chose:
-${categoryList}
-
-Return strict JSON:
+RETURN THIS EXACT JSON SCHEMA:
 {
-  "title": "Your 30-Day Journey",
-  "summary": "2-3 sentence personalized plan overview tied to their specific categories and biggest obstacle",
-  "goals": [],
-  "reflection": "One powerful motivating sentence personalized to their coaching style and 30-day vision",
-  "next_focus": "The single most important thing to focus on in week one",
-  "insight": ""
+  "plan_title": "personalized plan title",
+  "summary": "2-3 sentence personalized plan overview",
+  "categories": [${(categories || []).map(c => `"${c.name}"`).join(", ")}],
+  "daily_routine": ["item 1", "item 2", "item 3"],
+  "first_week_focus": ["focus 1", "focus 2", "focus 3"],
+  "motivation_note": "one powerful personalized sentence"
 }`;
   }
 
-  return `Return JSON: { "title": "", "summary": "Unknown request type", "goals": [], "reflection": "", "next_focus": "", "insight": "" }`;
+  return `RETURN THIS EXACT JSON: { "error": "unknown_request_type" }`;
+}
+
+function validateResponse(type: string, data: Record<string, unknown>): boolean {
+  if (!data || typeof data !== "object") return false;
+  if ("error" in data) return false;
+
+  if (type === "daily_goals" || type === "manual_refresh") {
+    return Array.isArray(data.daily_goals) && (data.daily_goals as unknown[]).length > 0;
+  }
+  if (type === "journal_insight" || type === "journal_completion_insight") {
+    return typeof data.summary === "string" && data.summary.length > 0;
+  }
+  if (type === "today_coaching") {
+    return typeof data.coach_note === "string" && data.coach_note.length > 0;
+  }
+  if (type === "onboarding_plan") {
+    return typeof data.plan_title === "string" && data.plan_title.length > 0;
+  }
+  return false;
+}
+
+function getDateFieldForType(type: string): string | null {
+  if (type === "daily_goals" || type === "manual_refresh") return "last_goal_generation_date";
+  if (type === "journal_insight" || type === "journal_completion_insight") return "last_insight_generation_date";
+  if (type === "today_coaching") return "last_insight_generation_date";
+  if (type === "onboarding_plan") return "last_plan_generation_date";
+  return null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -270,60 +206,67 @@ Deno.serve(async (req: Request) => {
       userId = user?.id ?? null;
     }
 
-    const body = await req.json();
-    const { type, categories, recentEntries, profile, previousGoals, streakData, dailyGoalLimit, content, entries, goalsCompleted, totalGoals } = body;
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: "Authentication required" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
+    const body = await req.json();
+    const { type } = body;
     const today = new Date().toISOString().split("T")[0];
 
-    if (userId) {
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json")
-        .eq("id", userId)
-        .maybeSingle();
+    // Fetch profile for guards
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date")
+      .eq("id", userId)
+      .maybeSingle();
 
-      if (prof) {
-        // Return cached result for goals only if the cached response has actual content
-        if (
-          prof.last_ai_request_date === today &&
-          prof.last_ai_request_type === type &&
-          prof.last_ai_response_json &&
-          Array.isArray((prof.last_ai_response_json as Record<string, unknown>).goals) &&
-          ((prof.last_ai_response_json as Record<string, unknown>).goals as unknown[]).length > 0 &&
-          (type === "daily_goals" || type === "goals")
-        ) {
-          return new Response(JSON.stringify(prof.last_ai_response_json), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
+    if (!prof) {
+      return new Response(
+        JSON.stringify({ error: "Profile not found" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-        // Block parallel requests
-        if (prof.ai_request_lock) {
-          return new Response(
-            JSON.stringify({ error: "Request already in progress" }),
-            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
+    // Block parallel requests
+    if (prof.ai_request_lock) {
+      return new Response(
+        JSON.stringify({ error: "Request already in progress" }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-        // Reset daily count on new day
-        if (prof.last_ai_request_date !== today) {
-          await supabase.from("profiles").update({ ai_generation_count_today: 0 }).eq("id", userId);
-        }
+    // Deduplication: return cached result if already generated today for this type
+    // manual_refresh bypasses cache
+    if (type !== "manual_refresh") {
+      const dateField = getDateFieldForType(type);
+      const dateValue = dateField ? (prof as Record<string, unknown>)[dateField] : null;
 
-        // Set lock
-        await supabase.from("profiles").update({ ai_request_lock: true }).eq("id", userId);
+      if (
+        dateValue === today &&
+        prof.last_ai_request_type === type &&
+        prof.last_ai_response_json &&
+        validateResponse(type, prof.last_ai_response_json as Record<string, unknown>)
+      ) {
+        return new Response(JSON.stringify(prof.last_ai_response_json), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
     }
+
+    // Set lock
+    await supabase.from("profiles").update({ ai_request_lock: true }).eq("id", userId);
 
     let result: Record<string, unknown> = {};
 
     try {
-      const userPrompt = buildUserPrompt({
-        type, categories, recentEntries, profile, previousGoals, streakData,
-        dailyGoalLimit, content, entries, goalsCompleted, totalGoals,
-      });
+      const userInput = buildUserInput(body);
 
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      // Use OpenAI Responses API
+      const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${openaiKey}`,
@@ -331,61 +274,68 @@ Deno.serve(async (req: Request) => {
         },
         body: JSON.stringify({
           model: MODEL,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.7,
-          max_tokens: MAX_TOKENS,
-          response_format: { type: "json_object" },
+          instructions: SYSTEM_INSTRUCTIONS,
+          input: userInput,
+          text: {
+            format: { type: "json_object" },
+          },
         }),
       });
 
       if (!response.ok) {
         const err = await response.text();
-        throw new Error(`OpenAI error: ${err}`);
+        throw new Error(`OpenAI error (${response.status}): ${err}`);
       }
 
       const data = await response.json();
-      result = JSON.parse(data.choices[0].message.content);
 
-      // Normalize goals field: support both "goals[].text" and "goals[].title" from AI
-      if (Array.isArray(result.goals)) {
-        result.goals = (result.goals as Array<Record<string, unknown>>).map((g) => ({
-          ...g,
-          title: g.title || g.text || "",
-          text: g.text || g.title || "",
-        }));
+      // Parse output from Responses API structure
+      const outputText = data.output?.[0]?.content?.[0]?.text
+        || data.output_text
+        || null;
+
+      if (!outputText) {
+        throw new Error("No output text in AI response");
       }
 
-      // Only persist successful responses
-      if (userId) {
-        const currentCount = await supabase
-          .from("profiles")
-          .select("ai_generation_count_today")
-          .eq("id", userId)
-          .maybeSingle();
+      result = JSON.parse(outputText);
 
-        await supabase.from("profiles").update({
-          ai_request_lock: false,
-          last_ai_request_type: type,
-          last_ai_request_date: today,
-          last_ai_response_json: result,
-          last_ai_response_at: new Date().toISOString(),
-          ai_generation_count_today: (currentCount.data?.ai_generation_count_today || 0) + 1,
-        }).eq("id", userId);
+      // Validate the response
+      if (!validateResponse(type, result)) {
+        throw new Error("AI response failed validation");
       }
+
+      // Save successful result
+      const dateField = getDateFieldForType(type);
+      const countToday = prof.last_ai_request_date === today
+        ? (prof.ai_generation_count_today || 0) + 1
+        : 1;
+
+      const profileUpdate: Record<string, unknown> = {
+        ai_request_lock: false,
+        last_ai_request_type: type,
+        last_ai_request_date: today,
+        last_ai_response_json: result,
+        last_ai_response_at: new Date().toISOString(),
+        ai_generation_count_today: countToday,
+      };
+
+      if (dateField) {
+        profileUpdate[dateField] = today;
+      }
+
+      await supabase.from("profiles").update(profileUpdate).eq("id", userId);
+
     } catch (innerErr) {
-      // Release lock without caching the failed result
-      if (userId) {
-        await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
-      }
+      // Release lock without caching failed response
+      await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
       throw innerErr;
     }
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+
   } catch (err) {
     if (userId) {
       await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});

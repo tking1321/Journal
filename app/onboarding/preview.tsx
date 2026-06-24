@@ -16,10 +16,12 @@ const COACH_LABELS: Record<string, string> = {
 };
 
 interface AiPlan {
-  title: string;
+  plan_title: string;
   summary: string;
-  reflection: string;
-  next_focus: string;
+  categories: string[];
+  daily_routine: string[];
+  first_week_focus: string[];
+  motivation_note: string;
 }
 
 export default function PreviewScreen() {
@@ -30,8 +32,6 @@ export default function PreviewScreen() {
   const [aiPlan, setAiPlan] = useState<AiPlan | null>(null);
   const [planGenerated, setPlanGenerated] = useState(false);
 
-  const today = new Date().toISOString().split('T')[0];
-
   // Called only when user explicitly presses "Generate My Plan"
   async function handleGeneratePlan() {
     if (planLoading || planGenerated || !user) return;
@@ -40,7 +40,6 @@ export default function PreviewScreen() {
 
     try {
       const result = await generateOnboardingPlan({
-        userId: user.id,
         categories: data.categories.map((c) => ({
           name: c.name,
           growth_description: c.growthDescription,
@@ -52,15 +51,16 @@ export default function PreviewScreen() {
           success_vision: data.successVision,
           daily_goal_limit: data.dailyGoalLimit,
         },
-        today,
       });
 
       if (result) {
         setAiPlan({
-          title: result.title || 'Your 30-Day Journey',
+          plan_title: result.plan_title || 'Your 30-Day Journey',
           summary: result.summary || '',
-          reflection: result.reflection || '',
-          next_focus: result.next_focus || '',
+          categories: result.categories || [],
+          daily_routine: result.daily_routine || [],
+          first_week_focus: result.first_week_focus || [],
+          motivation_note: result.motivation_note || '',
         });
         setPlanGenerated(true);
       }
@@ -159,21 +159,37 @@ export default function PreviewScreen() {
             <View style={styles.aiPlanCard}>
               <View style={styles.aiPlanHeader}>
                 <Feather name="cpu" size={14} color={Colors.primary} />
-                <Text style={styles.aiPlanTitle}>{aiPlan.title}</Text>
+                <Text style={styles.aiPlanTitle}>{aiPlan.plan_title}</Text>
               </View>
               {aiPlan.summary ? (
                 <Text style={styles.aiPlanSummary}>{aiPlan.summary}</Text>
               ) : null}
-              {aiPlan.reflection ? (
-                <View style={styles.aiPlanRow}>
-                  <Text style={styles.aiPlanRowLabel}>COACHING MESSAGE</Text>
-                  <Text style={styles.aiPlanRowText}>{aiPlan.reflection}</Text>
-                </View>
-              ) : null}
-              {aiPlan.next_focus ? (
+              {aiPlan.first_week_focus.length > 0 ? (
                 <View style={styles.aiPlanRow}>
                   <Text style={styles.aiPlanRowLabel}>WEEK ONE FOCUS</Text>
-                  <Text style={[styles.aiPlanRowText, styles.aiPlanFocusText]}>{aiPlan.next_focus}</Text>
+                  {aiPlan.first_week_focus.map((item, i) => (
+                    <View key={i} style={styles.aiPlanListItem}>
+                      <Feather name="chevron-right" size={12} color={Colors.textSecondary} />
+                      <Text style={styles.aiPlanListText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {aiPlan.daily_routine.length > 0 ? (
+                <View style={styles.aiPlanRow}>
+                  <Text style={styles.aiPlanRowLabel}>YOUR DAILY ROUTINE</Text>
+                  {aiPlan.daily_routine.map((item, i) => (
+                    <View key={i} style={styles.aiPlanListItem}>
+                      <Feather name="chevron-right" size={12} color={Colors.textSecondary} />
+                      <Text style={styles.aiPlanListText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {aiPlan.motivation_note ? (
+                <View style={styles.aiPlanRow}>
+                  <Text style={styles.aiPlanRowLabel}>FROM YOUR COACH</Text>
+                  <Text style={[styles.aiPlanRowText, styles.aiPlanFocusText]}>{aiPlan.motivation_note}</Text>
                 </View>
               ) : null}
             </View>
@@ -287,6 +303,8 @@ const styles = StyleSheet.create({
   aiPlanRowLabel: { fontFamily: 'Inter-Bold', fontSize: 9, color: Colors.textTertiary, letterSpacing: 1, marginBottom: 4 },
   aiPlanRowText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
   aiPlanFocusText: { fontFamily: 'Inter-SemiBold', color: Colors.text },
+  aiPlanListItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 4 },
+  aiPlanListText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20, flex: 1 },
   benefitsCard: {
     backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.borderLight,
     borderRadius: BorderRadius.md, padding: Spacing.md, gap: Spacing.sm,

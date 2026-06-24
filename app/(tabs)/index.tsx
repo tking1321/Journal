@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Animated
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
-import { generateGoals, generateDailyInsight } from '@/lib/ai';
+import { generateDailyGoals, refreshDailyGoals, generateTodayCoaching } from '@/lib/ai';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import CompletionRings from '@/components/CompletionRings';
@@ -100,16 +100,15 @@ export default function TodayScreen() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [streak, setStreak] = useState<Streak | null>(null);
   const [rings, setRings] = useState<DailyRing>({ journal_done: false, goals_done: false, day_complete: false });
+  const [coachNote, setCoachNote] = useState('');
   const [aiInsight, setAiInsight] = useState('');
-  const [aiNextFocus, setAiNextFocus] = useState('');
+  const [nextFocus, setNextFocus] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
-  // Separate locks per action — prevent double-tap and auto-fire
   const [generating, setGenerating] = useState(false);
-  const [insightLoading, setInsightLoading] = useState(false);
+  const [coachingLoading, setCoachingLoading] = useState(false);
   const [newAchievement, setNewAchievement] = useState<Achievement | null>(null);
   const [xpGain, setXpGain] = useState<{ amount: number; visible: boolean }>({ amount: 0, visible: false });
-  // Stored for use by button handlers without re-fetching
   const [recentEntries, setRecentEntries] = useState<{ content: string; entry_date: string }[]>([]);
   const celebrationOpacity = useRef(new Animated.Value(0)).current;
 
@@ -121,7 +120,6 @@ export default function TodayScreen() {
   const currentXpInLevel = getXpInCurrentLevel(totalXp, userLevel);
   const xpNeeded = getXpForNextLevel(userLevel);
 
-  // Loads data only — no API calls
   const loadData = useCallback(async () => {
     if (!user) return;
 
@@ -160,16 +158,20 @@ export default function TodayScreen() {
       }
     }
 
-    // Load cached insight — never auto-generate
-    const lastInsightDate = profile?.last_insight_generation_date as string | null;
+    // Load cached AI coaching from profile
     const cachedResponse = profile?.last_ai_response_json as Record<string, unknown> | null;
+    const lastType = (profile as Record<string, unknown>)?.last_ai_request_type as string | null;
+    const lastDate = (profile as Record<string, unknown>)?.last_ai_request_date as string | null;
 
-    if (lastInsightDate === today && cachedResponse) {
-      const reflection = cachedResponse?.reflection as string | undefined;
-      const insight = cachedResponse?.insight as string | undefined;
-      const nextFocus = cachedResponse?.next_focus as string | undefined;
-      if (reflection || insight) setAiInsight(reflection || insight || '');
-      if (nextFocus) setAiNextFocus(nextFocus);
+    if (lastDate === today && cachedResponse) {
+      if (lastType === 'today_coaching') {
+        if (cachedResponse.coach_note) setCoachNote(cachedResponse.coach_note as string);
+        if (cachedResponse.next_focus) setNextFocus(cachedResponse.next_focus as string);
+        if (cachedResponse.insight) setAiInsight(cachedResponse.insight as string);
+      } else if (lastType === 'daily_goals') {
+        if (cachedResponse.coach_note) setCoachNote(cachedResponse.coach_note as string);
+        if (cachedResponse.insight) setAiInsight(cachedResponse.insight as string);
+      }
     }
 
     setLoading(false);
@@ -272,7 +274,6 @@ export default function TodayScreen() {
     }
   }
 
-  // Called only when user explicitly presses "Generate Today's Goals" or "Refresh Goals"
   async function handleGenerateGoals(isRefresh = false) {
     if (generating) return;
     if (!user || categories.length === 0) return;
@@ -291,8 +292,7 @@ export default function TodayScreen() {
         .order('created_at', { ascending: false })
         .limit(12);
 
-      const result = await generateGoals({
-        userId: user.id,
+      const aiParams = {
         categories,
         recentEntries,
         previousGoals: previousGoals || [],
@@ -306,13 +306,16 @@ export default function TodayScreen() {
           total_xp_earned: profile?.total_xp_earned,
           daily_goal_limit: profile?.daily_goal_limit,
         },
-        today,
-      });
+      };
 
-      if (result && result.goals.length > 0) {
-        const inserts = result.goals.map((g) => ({
-          title: g.title || g.text || 'Daily goal',
-          description: g.description || '',
+      const result = isRefresh
+        ? await refreshDailyGoals(aiParams)
+        : await generateDailyGoals(aiParams);
+
+      if (result && result.daily_goals && result.daily_goals.length > 0) {
+        const inserts = result.daily_goals.map((g) => ({
+          title: g.text,
+          description: '',
           goal_date: today,
           category_id: categories.find((c) => c.name === g.categoryName)?.id || null,
           difficulty: g.difficulty || 'easy',
@@ -320,10 +323,9 @@ export default function TodayScreen() {
         }));
         const { data: newGoals } = await supabase.from('goals').insert(inserts).select();
         setGoals(newGoals || []);
-        if (result.reflection) setAiInsight(result.reflection);
-        if (result.next_focus) setAiNextFocus(result.next_focus);
+        if (result.coach_note) setCoachNote(result.coach_note);
+        if (result.insight) setAiInsight(result.insight);
       } else {
-        // Fallback: category-based goals when AI returns nothing
         const fallbackGoals = categories.slice(0, profile?.daily_goal_limit || 3).map((cat, i) => ({
           title: `Focused time on: ${cat.name}`,
           description: cat.growth_description || `Build your ${cat.name} practice today`,
@@ -334,46 +336,36 @@ export default function TodayScreen() {
         }));
         const { data: newGoals } = await supabase.from('goals').insert(fallbackGoals).select();
         setGoals(newGoals || []);
-        await supabase.from('profiles').update({ last_goal_generation_date: today }).eq('id', user.id);
       }
     } finally {
       setGenerating(false);
     }
   }
 
-  // Called only when user explicitly presses "Get Today's Insight"
-  async function handleGetInsight() {
-    if (insightLoading) return;
+  async function handleGetCoaching() {
+    if (coachingLoading) return;
     if (!user) return;
 
-    setInsightLoading(true);
-
+    setCoachingLoading(true);
     try {
-      const result = await generateDailyInsight({
-        userId: user.id,
+      const result = await generateTodayCoaching({
         recentEntries,
         profile: {
           coaching_style: profile?.coaching_style,
           success_vision: profile?.success_vision,
+          biggest_obstacle: profile?.biggest_obstacle,
         },
-        today,
       });
 
-      if (result?.reflection) setAiInsight(result.reflection);
-      if (result?.next_focus) setAiNextFocus(result.next_focus);
-
-      if (!result) {
-        const fallback: Record<string, string[]> = {
-          'strict coach': ['Show up. No excuses today.', 'Discipline beats motivation every time.'],
-          'gentle coach': ["You're building something real.", 'Every small step compounds.'],
-          'reflective prompts': ['What would your future self thank you for today?', 'What does progress look like right now?'],
-          'direct action': ['Pick one thing. Do it completely.', "Clarity comes from action, not thinking."],
-        };
-        const phrases = fallback[profile?.coaching_style || 'gentle coach'] || fallback['gentle coach'];
-        setAiInsight(phrases[Math.floor(Math.random() * phrases.length)]);
+      if (result) {
+        if (result.coach_note) setCoachNote(result.coach_note);
+        if (result.next_focus) setNextFocus(result.next_focus);
+        if (result.insight) setAiInsight(result.insight);
+      } else {
+        setCoachNote('Take one step forward today. That is enough.');
       }
     } finally {
-      setInsightLoading(false);
+      setCoachingLoading(false);
     }
   }
 
@@ -447,8 +439,6 @@ export default function TodayScreen() {
   const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
   const diffBg = isDark ? DIFFICULTY_BG_DARK : DIFFICULTY_BG_LIGHT;
 
-  const insightAlreadyToday = (profile?.last_insight_generation_date as string | null) === today;
-
   return (
     <View style={[styles.outerContainer, { backgroundColor: colors.background }]}>
       <ScrollView
@@ -508,33 +498,39 @@ export default function TodayScreen() {
           </View>
         )}
 
-        {/* Daily Insights — shown when cached, or button to generate */}
-        {aiInsight ? (
-          <View style={[styles.insightsCard, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
-            <Text style={[styles.insightsLabel, { color: colors.textTertiary }]}>DAILY INSIGHTS</Text>
-            <Text style={[styles.insightsText, { color: colors.text }]}>{aiInsight}</Text>
-            {aiNextFocus ? (
+        {/* AI Coaching Section */}
+        {coachNote ? (
+          <View style={[styles.coachingCard, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
+            <Text style={[styles.coachingLabel, { color: colors.textTertiary }]}>TODAY'S COACHING</Text>
+            <Text style={[styles.coachingText, { color: colors.text }]}>{coachNote}</Text>
+            {nextFocus ? (
               <View style={[styles.nextFocusRow, { borderTopColor: colors.borderLight }]}>
                 <Text style={[styles.nextFocusLabel, { color: colors.textTertiary }]}>NEXT FOCUS</Text>
-                <Text style={[styles.nextFocusText, { color: colors.text }]}>{aiNextFocus}</Text>
+                <Text style={[styles.nextFocusText, { color: colors.text }]}>{nextFocus}</Text>
+              </View>
+            ) : null}
+            {aiInsight ? (
+              <View style={[styles.nextFocusRow, { borderTopColor: colors.borderLight }]}>
+                <Text style={[styles.nextFocusLabel, { color: colors.textTertiary }]}>INSIGHT</Text>
+                <Text style={[styles.insightText, { color: colors.textSecondary }]}>{aiInsight}</Text>
               </View>
             ) : null}
           </View>
         ) : (
           <Pressable
-            style={[styles.insightButton, { backgroundColor: colors.surface, borderColor: colors.borderLight }, insightLoading && styles.buttonDisabled]}
-            onPress={handleGetInsight}
-            disabled={insightLoading || insightAlreadyToday}
+            style={[styles.coachingButton, { backgroundColor: colors.surface, borderColor: colors.borderLight }, coachingLoading && styles.buttonDisabled]}
+            onPress={handleGetCoaching}
+            disabled={coachingLoading}
           >
-            {insightLoading ? (
+            {coachingLoading ? (
               <>
                 <Feather name="cpu" size={14} color={colors.textTertiary} />
-                <Text style={[styles.insightButtonText, { color: colors.textSecondary }]}>Getting insight...</Text>
+                <Text style={[styles.coachingButtonText, { color: colors.textSecondary }]}>Getting insight...</Text>
               </>
             ) : (
               <>
                 <Feather name="sun" size={14} color={colors.accent} />
-                <Text style={[styles.insightButtonText, { color: colors.text }]}>Get Today's Insight</Text>
+                <Text style={[styles.coachingButtonText, { color: colors.text }]}>Get Today's Insight</Text>
               </>
             )}
           </Pressable>
@@ -704,21 +700,22 @@ const styles = StyleSheet.create({
   streakFill: { height: '100%', borderRadius: BorderRadius.full },
   streakBest: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 
-  insightsCard: {
+  coachingCard: {
     borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.lg,
   },
-  insightsLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 8 },
-  insightsText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 22 },
+  coachingLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 8 },
+  coachingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 22 },
   nextFocusRow: { borderTopWidth: 1, marginTop: Spacing.md, paddingTop: Spacing.md },
   nextFocusLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
   nextFocusText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, lineHeight: 20 },
+  insightText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20, fontStyle: 'italic' },
 
-  insightButton: {
+  coachingButton: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md,
     marginBottom: Spacing.lg, justifyContent: 'center',
   },
-  insightButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  coachingButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
   sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
