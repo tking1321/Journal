@@ -86,181 +86,73 @@ Return ONLY this JSON:
   return `{"error":"unknown_request_type"}`;
 }
 
-function validateResponse(type: string, data: Record<string, unknown>): boolean {
-  if (!data || typeof data !== "object") return false;
-  if ("error" in data) return false;
-  if (type === "daily_goals" || type === "manual_refresh") return Array.isArray(data.daily_goals) && (data.daily_goals as unknown[]).length > 0;
-  if (type === "journal_insight" || type === "journal_completion_insight") return typeof data.summary === "string" && data.summary.length > 0;
-  if (type === "today_coaching") return typeof data.coach_note === "string" && data.coach_note.length > 0;
-  if (type === "onboarding_plan") return typeof data.plan_title === "string" && data.plan_title.length > 0;
-  return false;
-}
-
-function dateFieldForType(type: string): string | null {
-  if (type === "daily_goals" || type === "manual_refresh") return "last_goal_generation_date";
-  if (type === "journal_insight" || type === "journal_completion_insight") return "last_insight_generation_date";
-  if (type === "today_coaching") return "last_coaching_generation_date";
-  if (type === "onboarding_plan") return "last_plan_generation_date";
-  return null;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const supabase = createClient(supabaseUrl, supabaseKey);
-  let userId: string | null = null;
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) {
+    return new Response(JSON.stringify({ error: "OPENAI_API_KEY not configured" }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
 
   try {
-    const openaiKey = Deno.env.get("OPENAI_API_KEY");
-    if (!openaiKey) {
-      console.error("[generate-ai] OPENAI_API_KEY secret is not set");
-      return new Response(JSON.stringify({ error: "OPENAI_API_KEY not configured" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     const body = await req.json();
-    const { type, _token } = body;
+    const { _token, ...aiBody } = body as Record<string, unknown>;
 
-    const authToken = (_token as string | undefined) || req.headers.get("Authorization")?.replace("Bearer ", "") || "";
-    if (!authToken) {
-      console.error("[generate-ai] Missing auth token");
+    // Accept token from body (DB gateway path) or Authorization header (direct path)
+    const token = (_token as string | undefined) ||
+      req.headers.get("Authorization")?.replace("Bearer ", "") || "";
+
+    if (!token) {
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authToken);
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     if (authError || !user) {
-      console.error("[generate-ai] Auth failed:", authError?.message ?? "no user");
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    userId = user.id;
-    const today = new Date().toISOString().split("T")[0];
 
-    console.log(`[generate-ai] user=${userId} type=${type}`);
+    const userPrompt = buildPrompt(aiBody as Parameters<typeof buildPrompt>[0]);
 
-    const { data: prof, error: profError } = await supabase
-      .from("profiles")
-      .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_ai_response_at, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date, last_coaching_generation_date")
-      .eq("id", userId)
-      .maybeSingle();
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.7,
+      }),
+    });
 
-    if (profError || !prof) {
-      console.error("[generate-ai] Profile fetch error:", profError?.message ?? "not found");
-      return new Response(JSON.stringify({ error: "Profile not found" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI error (${response.status}): ${errText}`);
     }
 
-    if (prof.ai_request_lock) {
-      // Auto-expire stale locks (left over from timed-out runs) older than 2 minutes.
-      const lastResponse = (prof as Record<string, unknown>).last_ai_response_at as string | null;
-      const lockIsStale = !lastResponse || (Date.now() - new Date(lastResponse).getTime() > 2 * 60 * 1000);
-      if (lockIsStale) {
-        console.log("[generate-ai] Stale lock detected, auto-releasing");
-        await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId);
-      } else {
-        console.log("[generate-ai] Lock active, rejecting duplicate request");
-        return new Response(JSON.stringify({ error: "Request already in progress" }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-    }
+    const openaiData = await response.json();
+    const outputText = openaiData?.choices?.[0]?.message?.content;
+    if (!outputText) throw new Error("No content in OpenAI response");
 
-    // Return cached result for today if valid (manual_refresh bypasses cache)
-    if (type !== "manual_refresh") {
-      const dateField = dateFieldForType(type);
-      const dateValue = dateField ? (prof as Record<string, unknown>)[dateField] : null;
-      if (
-        dateValue === today &&
-        prof.last_ai_request_type === type &&
-        prof.last_ai_response_json &&
-        validateResponse(type, prof.last_ai_response_json as Record<string, unknown>)
-      ) {
-        console.log(`[generate-ai] Returning cached response for type=${type}`);
-        return new Response(JSON.stringify(prof.last_ai_response_json), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    await supabase.from("profiles").update({ ai_request_lock: true }).eq("id", userId);
-
-    let result: Record<string, unknown> = {};
-
-    try {
-      const userPrompt = buildPrompt(body);
-
-      console.log(`[generate-ai] Calling OpenAI model=${MODEL} type=${type}`);
-
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${openaiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userPrompt },
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error(`[generate-ai] OpenAI error status=${response.status}:`, errText);
-        throw new Error(`OpenAI error (${response.status}): ${errText}`);
-      }
-
-      const openaiData = await response.json();
-      const outputText = openaiData?.choices?.[0]?.message?.content;
-
-      if (!outputText) {
-        console.error("[generate-ai] No content in OpenAI response:", JSON.stringify(openaiData));
-        throw new Error("No content in OpenAI response");
-      }
-
-      console.log(`[generate-ai] OpenAI response received, parsing JSON`);
-      result = JSON.parse(outputText);
-
-      if (!validateResponse(type, result)) {
-        console.error(`[generate-ai] Validation failed for type=${type}:`, JSON.stringify(result));
-        throw new Error(`AI response failed validation for type: ${type}`);
-      }
-
-      const dateField = dateFieldForType(type);
-      const countToday = prof.last_ai_request_date === today
-        ? (prof.ai_generation_count_today || 0) + 1
-        : 1;
-
-      const profileUpdate: Record<string, unknown> = {
-        ai_request_lock: false,
-        last_ai_request_type: type,
-        last_ai_request_date: today,
-        last_ai_response_json: result,
-        last_ai_response_at: new Date().toISOString(),
-        ai_generation_count_today: countToday,
-      };
-      if (dateField) profileUpdate[dateField] = today;
-
-      await supabase.from("profiles").update(profileUpdate).eq("id", userId);
-      console.log(`[generate-ai] Success type=${type}`);
-
-    } catch (innerErr) {
-      await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
-      throw innerErr;
-    }
+    const result = JSON.parse(outputText);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -268,13 +160,9 @@ Deno.serve(async (req: Request) => {
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    console.error("[generate-ai] Unhandled error:", msg);
-    if (userId) {
-      await supabase.from("profiles").update({ ai_request_lock: false }).eq("id", userId).catch(() => {});
-    }
-    return new Response(
-      JSON.stringify({ error: msg }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    console.error("[generate-ai] error:", msg);
+    return new Response(JSON.stringify({ error: msg }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

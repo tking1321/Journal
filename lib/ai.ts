@@ -1,4 +1,4 @@
-import { supabase, supabaseUrl, supabaseAnonKey } from './supabase';
+import { supabase } from './supabase';
 
 export type AiRequestType =
   | 'daily_goals'
@@ -48,33 +48,25 @@ export interface OnboardingPlanResult {
   motivation_note: string;
 }
 
-// Throws an Error with the actual message from the edge function on failure.
+// Routes through supabase.rpc so the browser never touches /functions/v1/*
+// directly — PostgREST proxying works where direct edge-function fetch does not.
 async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data, error } = await supabase.rpc('call_ai', { payload: body });
 
-  // Use text/plain + token-in-body to avoid CORS preflight (no custom request headers).
-  // Edge function reads the token from the _token field in the JSON payload.
-  const response = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify({ ...body, _token: session?.access_token ?? '' }),
-  });
+  if (error) {
+    console.error('[AI] rpc error:', error.message);
+    throw new Error(error.message);
+  }
 
-  const data = await response.json();
+  const result = data as Record<string, unknown>;
 
-  if (!response.ok) {
-    const detail = data?.error ?? `HTTP ${response.status}`;
-    console.error('[AI] edge function error:', detail);
+  if (result && typeof result === 'object' && 'error' in result) {
+    const detail = String(result.error);
+    console.error('[AI] call_ai returned error:', detail);
     throw new Error(detail);
   }
 
-  if (data && typeof data === 'object' && 'error' in data) {
-    const detail = String((data as Record<string, unknown>).error);
-    console.error('[AI] edge function returned error field:', detail);
-    throw new Error(detail);
-  }
-
-  return data as Record<string, unknown>;
+  return result;
 }
 
 export async function generateDailyGoals(params: {
