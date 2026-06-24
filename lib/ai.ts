@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabaseUrl, supabaseAnonKey } from './supabase';
 
 export type AiRequestType =
   | 'daily_goals'
@@ -50,22 +50,24 @@ export interface OnboardingPlanResult {
 
 // Throws an Error with the actual message from the edge function on failure.
 async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data, error } = await supabase.functions.invoke('generate-ai', { body });
+  const { data: { session } } = await supabase.auth.getSession();
 
-  if (error) {
-    // FunctionsHttpError has a context with the response body
-    if (error.context && typeof error.context.json === 'function') {
-      try {
-        const errBody = await error.context.json();
-        const detail = errBody?.error ?? error.message;
-        console.error('[AI] edge function http error:', detail);
-        throw new Error(detail);
-      } catch (parseErr) {
-        if (parseErr instanceof Error && parseErr.message !== error.message) throw parseErr;
-      }
-    }
-    console.error('[AI] edge function error:', error.message);
-    throw new Error(error.message);
+  const response = await fetch(`${supabaseUrl}/functions/v1/generate-ai`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session?.access_token ?? ''}`,
+      'apikey': supabaseAnonKey,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const detail = data?.error ?? `HTTP ${response.status}`;
+    console.error('[AI] edge function error:', detail);
+    throw new Error(detail);
   }
 
   if (data && typeof data === 'object' && 'error' in data) {
