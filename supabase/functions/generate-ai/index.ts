@@ -34,11 +34,8 @@ function buildUserInput(params: {
   previousGoals?: Array<{ title: string; completed: boolean; difficulty: string }>;
   streakData?: { current_streak: number; longest_streak: number } | null;
   content?: string;
-  entries?: Array<{ content: string; entry_date: string }>;
-  goalsCompleted?: number;
-  totalGoals?: number;
 }): string {
-  const { type, categories, recentEntries, profile, previousGoals, streakData, content, entries, goalsCompleted, totalGoals } = params;
+  const { type, categories, recentEntries, profile, previousGoals, streakData, content } = params;
 
   const goalCount = profile?.daily_goal_limit || 3;
 
@@ -126,7 +123,7 @@ RETURN THIS EXACT JSON SCHEMA:
 {
   "coach_note": "one calm, personalized coaching sentence (max 25 words)",
   "next_focus": "one specific thing to focus on today",
-  "insight": ""
+  "insight": "one brief observation about their journey"
 }`;
   }
 
@@ -174,8 +171,37 @@ function validateResponse(type: string, data: Record<string, unknown>): boolean 
 function getDateFieldForType(type: string): string | null {
   if (type === "daily_goals" || type === "manual_refresh") return "last_goal_generation_date";
   if (type === "journal_insight" || type === "journal_completion_insight") return "last_insight_generation_date";
-  if (type === "today_coaching") return "last_insight_generation_date";
+  if (type === "today_coaching") return "last_coaching_generation_date";
   if (type === "onboarding_plan") return "last_plan_generation_date";
+  return null;
+}
+
+function extractTextFromResponse(data: Record<string, unknown>): string | null {
+  // The Responses API output array can contain multiple items.
+  // We must iterate through all items and find message content blocks
+  // of type "output_text", then aggregate their text.
+  const output = data.output;
+
+  // First try: the SDK-style top-level output_text (convenience field)
+  if (typeof data.output_text === "string" && data.output_text.length > 0) {
+    return data.output_text;
+  }
+
+  // Second: iterate the output array properly per the API docs
+  if (Array.isArray(output)) {
+    let aggregated = "";
+    for (const item of output) {
+      if (item && typeof item === "object" && item.type === "message" && Array.isArray(item.content)) {
+        for (const block of item.content) {
+          if (block && typeof block === "object" && block.type === "output_text" && typeof block.text === "string") {
+            aggregated += block.text;
+          }
+        }
+      }
+    }
+    if (aggregated.length > 0) return aggregated;
+  }
+
   return null;
 }
 
@@ -220,7 +246,7 @@ Deno.serve(async (req: Request) => {
     // Fetch profile for guards
     const { data: prof } = await supabase
       .from("profiles")
-      .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date")
+      .select("ai_request_lock, ai_generation_count_today, last_ai_request_date, last_ai_request_type, last_ai_response_json, last_goal_generation_date, last_insight_generation_date, last_plan_generation_date, last_coaching_generation_date")
       .eq("id", userId)
       .maybeSingle();
 
@@ -240,11 +266,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // Deduplication: return cached result if already generated today for this type
-    // manual_refresh bypasses cache
+    // manual_refresh bypasses cache entirely
     if (type !== "manual_refresh") {
       const dateField = getDateFieldForType(type);
       const dateValue = dateField ? (prof as Record<string, unknown>)[dateField] : null;
 
+      // Only use cache if the per-type date matches today AND the last request was this type
       if (
         dateValue === today &&
         prof.last_ai_request_type === type &&
@@ -265,7 +292,7 @@ Deno.serve(async (req: Request) => {
     try {
       const userInput = buildUserInput(body);
 
-      // Use OpenAI Responses API
+      // Use OpenAI Responses API with json_object format
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
@@ -289,10 +316,8 @@ Deno.serve(async (req: Request) => {
 
       const data = await response.json();
 
-      // Parse output from Responses API structure
-      const outputText = data.output?.[0]?.content?.[0]?.text
-        || data.output_text
-        || null;
+      // Parse output from Responses API — properly iterate all output items
+      const outputText = extractTextFromResponse(data);
 
       if (!outputText) {
         throw new Error("No output text in AI response");

@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
 
 export type AiRequestType =
   | 'daily_goals'
@@ -59,7 +60,8 @@ async function callAI(body: Record<string, unknown>): Promise<Record<string, unk
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
+      'Authorization': `Bearer ${token}`,
+      'apikey': SUPABASE_ANON_KEY,
     },
     body: JSON.stringify(body),
   });

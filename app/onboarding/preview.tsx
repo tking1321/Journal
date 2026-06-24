@@ -31,12 +31,14 @@ export default function PreviewScreen() {
   const [planLoading, setPlanLoading] = useState(false);
   const [aiPlan, setAiPlan] = useState<AiPlan | null>(null);
   const [planGenerated, setPlanGenerated] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
 
   // Called only when user explicitly presses "Generate My Plan"
   async function handleGeneratePlan() {
     if (planLoading || planGenerated || !user) return;
 
     setPlanLoading(true);
+    setPlanError(null);
 
     try {
       const result = await generateOnboardingPlan({
@@ -63,6 +65,8 @@ export default function PreviewScreen() {
           motivation_note: result.motivation_note || '',
         });
         setPlanGenerated(true);
+      } else {
+        setPlanError('Could not generate your plan. Please try again.');
       }
     } finally {
       setPlanLoading(false);
@@ -214,6 +218,9 @@ export default function PreviewScreen() {
               )}
             </Pressable>
             <Text style={styles.generatePlanHint}>Uses AI to create a plan personalized to your answers</Text>
+            {planError ? (
+              <Text style={styles.planErrorText}>{planError}</Text>
+            ) : null}
           </View>
         )}
 
@@ -290,6 +297,10 @@ const styles = StyleSheet.create({
   generatePlanButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse },
   generatePlanHint: {
     fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary,
+    textAlign: 'center', marginTop: Spacing.sm,
+  },
+  planErrorText: {
+    fontFamily: 'Inter-Medium', fontSize: FontSize.sm, color: '#C0392B',
     textAlign: 'center', marginTop: Spacing.sm,
   },
   aiPlanCard: {
