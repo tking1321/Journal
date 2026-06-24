@@ -100,12 +100,9 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json();
-    const { _token, ...aiBody } = body as Record<string, unknown>;
+    const { _user_id, ...aiBody } = body as Record<string, unknown>;
 
-    // Accept token from body (DB gateway path) or Authorization header (direct path)
-    const token = (_token as string | undefined) ||
-      req.headers.get("Authorization")?.replace("Bearer ", "") || "";
-
+    const token = req.headers.get("Authorization")?.replace("Bearer ", "") ?? "";
     if (!token) {
       return new Response(JSON.stringify({ error: "Authentication required" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -117,12 +114,34 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Authentication required" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    let userId: string;
+
+    // Detect internal DB-gateway calls: the bearer token will be the project anon
+    // key (role: "anon") and the verified user_id is passed in the body.
+    let tokenRole = "";
+    try {
+      const payloadB64 = token.split(".")[1];
+      const padding = payloadB64.length % 4 === 0 ? "" : "=".repeat(4 - (payloadB64.length % 4));
+      const decoded = JSON.parse(atob(payloadB64 + padding));
+      tokenRole = decoded?.role ?? "";
+    } catch { /* ignore */ }
+
+    if (tokenRole === "anon" && typeof _user_id === "string" && _user_id.length > 0) {
+      // Trusted call from the call_ai() PostgreSQL function.
+      // auth.uid() already verified the user on the DB side.
+      userId = _user_id;
+    } else {
+      // Direct call with a user JWT (e.g. future native app).
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !user) {
+        return new Response(JSON.stringify({ error: "Authentication required" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      userId = user.id;
     }
+
+    console.log(`[generate-ai] user=${userId} type=${(aiBody as Record<string, unknown>).type}`);
 
     const userPrompt = buildPrompt(aiBody as Parameters<typeof buildPrompt>[0]);
 
