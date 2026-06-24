@@ -1,8 +1,5 @@
 import { supabase } from './supabase';
 
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-
 export type AiRequestType =
   | 'daily_goals'
   | 'journal_insight'
@@ -52,33 +49,19 @@ export interface OnboardingPlanResult {
 }
 
 async function callAI(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  if (!token) return null;
+  const { data, error } = await supabase.functions.invoke('generate-ai', { body });
 
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/generate-ai`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      'apikey': SUPABASE_ANON_KEY,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    console.warn(`AI request failed (${response.status}):`, text);
+  if (error) {
+    console.warn('AI request failed:', error.message);
     return null;
   }
 
-  const result = await response.json();
-  if (result && typeof result === 'object' && 'error' in result) {
-    console.warn('AI returned error:', result.error);
+  if (data && typeof data === 'object' && 'error' in data) {
+    console.warn('AI returned error:', (data as Record<string, unknown>).error);
     return null;
   }
 
-  return result;
+  return data as Record<string, unknown> | null;
 }
 
 export async function generateDailyGoals(params: {
