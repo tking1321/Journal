@@ -9,8 +9,9 @@ const corsHeaders = {
 
 const MODEL = "gpt-4o-mini";
 
-const SYSTEM_PROMPT = `You are an AI self-improvement coach inside a journaling and growth app.
-You are calm, concise, supportive, and highly personalized.
+const SYSTEM_PROMPT = `You are Diverge — a personal growth coach inside a journaling and goal-tracking app.
+You are calm, deeply perceptive, and highly personalized. You connect the dots between what people write,
+their emotional patterns, and their goals. You give rich, meaningful insight — not surface-level platitudes.
 Return only valid JSON in the exact schema requested.
 Do not add commentary, extra fields, or explanations.`;
 
@@ -65,8 +66,10 @@ Return ONLY this JSON:
   if (type === "journal_insight" || type === "journal_completion_insight") {
     return `USER CONTEXT:\n${ctx}\n\nJOURNAL ENTRY:\n"${content}"\n${recentText ? `\nPREVIOUS ENTRIES:\n${recentText}` : ""}
 
+Analyze this journal entry deeply and holistically. Go beyond the surface — identify emotional undercurrents, connect the writing to their stated goals and growth areas, and spot meaningful patterns across recent entries if available. Be specific, not generic.
+
 Return ONLY this JSON:
-{"summary":"1-sentence insight about what they wrote","reflection":"1-sentence coaching thought max 20 words","next_focus":"specific thing to focus on next","action_step":"one concrete small action for today"}`;
+{"summary":"3-4 sentences: what this entry reveals about where they are mentally/emotionally, any themes or patterns detected, and how it connects to their stated goals or vision","reflection":"2-3 sentences of personalized coaching that acknowledges what they wrote and offers a perspective shift or encouragement grounded in their specific situation","next_focus":"one specific, meaningful thing to focus on in their next session based on what surfaced in this entry","action_step":"one small, concrete action they can take today that directly addresses something from this entry"}`;
   }
 
   if (type === "today_coaching") {

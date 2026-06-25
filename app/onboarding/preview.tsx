@@ -134,7 +134,7 @@ export default function PreviewScreen() {
           <View style={styles.routineCard}>
             <View style={styles.routineRow}>
               <Feather name="target" size={14} color={Colors.text} />
-              <Text style={styles.routineText}>1–3 daily AI-generated goals</Text>
+              <Text style={styles.routineText}>1–3 daily Diverge-generated goals</Text>
             </View>
             <View style={styles.routineRow}>
               <Feather name="edit-3" size={14} color={Colors.text} />
@@ -142,7 +142,7 @@ export default function PreviewScreen() {
             </View>
             <View style={styles.routineRow}>
               <Feather name="bar-chart-2" size={14} color={Colors.text} />
-              <Text style={styles.routineText}>Weekly AI insights on your progress</Text>
+              <Text style={styles.routineText}>Weekly Diverge insights on your progress</Text>
             </View>
           </View>
         </View>
@@ -162,7 +162,7 @@ export default function PreviewScreen() {
             <Text style={styles.sectionLabel}>YOUR PERSONALIZED STRATEGY</Text>
             <View style={styles.aiPlanCard}>
               <View style={styles.aiPlanHeader}>
-                <Feather name="cpu" size={14} color={Colors.primary} />
+                <Feather name="zap" size={14} color={Colors.primary} />
                 <Text style={styles.aiPlanTitle}>{aiPlan.plan_title}</Text>
               </View>
               {aiPlan.summary ? (
@@ -212,12 +212,12 @@ export default function PreviewScreen() {
                 </>
               ) : (
                 <>
-                  <Feather name="cpu" size={16} color={Colors.textInverse} />
+                  <Feather name="zap" size={16} color={Colors.textInverse} />
                   <Text style={styles.generatePlanButtonText}>Generate My Plan</Text>
                 </>
               )}
             </Pressable>
-            <Text style={styles.generatePlanHint}>Uses AI to create a plan personalized to your answers</Text>
+            <Text style={styles.generatePlanHint}>Diverge creates a plan personalized to your answers</Text>
             {planError ? (
               <Text style={styles.planErrorText}>{planError}</Text>
             ) : null}
@@ -228,10 +228,10 @@ export default function PreviewScreen() {
           <Text style={styles.sectionLabel}>WHAT YOU'LL GET</Text>
           <View style={styles.benefitsCard}>
             {[
-              'AI goals matched to your categories every day',
+              'Diverge goals matched to your categories every day',
               'A coaching voice built from your answers',
               'Streak tracking to stay consistent',
-              'Private, secure journal with AI summaries',
+              'Private, secure journal with Diverge insights',
               'Weekly insights to see what\'s actually working',
             ].map((benefit, i) => (
               <View key={i} style={styles.benefitRow}>

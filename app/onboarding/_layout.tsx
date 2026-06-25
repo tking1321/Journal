@@ -14,6 +14,7 @@ export default function OnboardingLayout() {
       <Stack.Screen name="journaling" />
       <Stack.Screen name="obstacle" />
       <Stack.Screen name="success" />
+      <Stack.Screen name="review" />
       <Stack.Screen name="preview" />
     </Stack>
   );

@@ -14,7 +14,7 @@ export default function SuccessScreen() {
 
   function handleNext() {
     updateData({ successVision: text });
-    router.push('/onboarding/preview');
+    router.push('/onboarding/review');
   }
 
   return (

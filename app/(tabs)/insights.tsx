@@ -269,25 +269,41 @@ export default function InsightsScreen() {
         </View>
         <View style={styles.islandGrid}>
           {Array.from({ length: 30 }).map((_, i) => {
-            const buildings = island?.buildings_count || 0;
-            const isFilled = i < buildings;
-            const isCurrent = i === buildings && i < dayOfMonth;
+            const dayNum = i + 1;
+            const mm = String(calendarMonth + 1).padStart(2, '0');
+            const dd = String(dayNum).padStart(2, '0');
+            const dateStr = `${calendarYear}-${mm}-${dd}`;
+            const dayData = calendarDays.find((d) => d.date === dateStr);
+            const isCompleted = dayData?.complete ?? false;
+            const isToday = dayNum === dayOfMonth;
+            const isFuture = dateStr > today;
             return (
               <View
                 key={i}
                 style={[
                   styles.islandBlock,
                   { backgroundColor: colors.borderLight },
-                  isFilled && { backgroundColor: colors.primary },
-                  isCurrent && { backgroundColor: colors.primary + '50' },
+                  isCompleted && { backgroundColor: colors.success ?? '#22c55e' },
+                  isToday && !isCompleted && !isFuture && { backgroundColor: colors.primary + '40', borderWidth: 1, borderColor: colors.primary },
                 ]}
               />
             );
           })}
         </View>
-        <Text style={[styles.islandCaption, { color: colors.textTertiary }]}>
-          {island?.buildings_count || 0} complete days this month
-        </Text>
+        <View style={styles.islandLegend}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: colors.success ?? '#22c55e' }]} />
+            <Text style={[styles.legendText, { color: colors.textSecondary }]}>Complete day</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: colors.primary + '40', borderWidth: 1, borderColor: colors.primary }]} />
+            <Text style={[styles.legendText, { color: colors.textSecondary }]}>Today</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: colors.borderLight }]} />
+            <Text style={[styles.legendText, { color: colors.textSecondary }]}>Incomplete</Text>
+          </View>
+        </View>
       </View>
 
       {/* Achievements */}
@@ -383,6 +399,7 @@ const styles = StyleSheet.create({
   islandGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: Spacing.sm },
   islandBlock: { width: 14, height: 14, borderRadius: 3 },
   islandCaption: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
+  islandLegend: { flexDirection: 'row', gap: Spacing.md, flexWrap: 'wrap', marginTop: Spacing.xs },
 
   achievementsList: { gap: Spacing.sm, marginBottom: Spacing.lg },
   achievementRow: {

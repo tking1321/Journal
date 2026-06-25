@@ -284,6 +284,9 @@ export default function TodayScreen() {
       if (isRefresh) {
         await supabase.from('goals').delete().eq('goal_date', today).eq('user_id', user.id);
         setGoals([]);
+        // Track refresh date so it can only happen once per day
+        await supabase.from('profiles').update({ last_goal_refresh_date: today }).eq('id', user.id);
+        await refreshProfile();
       }
 
       const { data: previousGoals } = await supabase
@@ -362,7 +365,7 @@ export default function TodayScreen() {
         if (result.next_focus) setNextFocus(result.next_focus);
         if (result.insight) setAiInsight(result.insight);
       } else {
-        setCoachNote(`AI error: ${aiError ?? 'unknown error'}`);
+        setCoachNote(`Diverge error: ${aiError ?? 'unknown error'}`);
       }
     } finally {
       setCoachingLoading(false);
@@ -434,10 +437,10 @@ export default function TodayScreen() {
   const goalProgress = goals.length > 0 ? completedCount / goals.length : 0;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const streakGoal = streak?.streak_goal || 7;
   const dayOfMonth = new Date().getDate();
   const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
   const diffBg = isDark ? DIFFICULTY_BG_DARK : DIFFICULTY_BG_LIGHT;
+  const alreadyRefreshedToday = profile?.last_goal_refresh_date === today;
 
   return (
     <View style={[styles.outerContainer, { backgroundColor: colors.background }]}>
@@ -489,11 +492,9 @@ export default function TodayScreen() {
           <View style={[styles.streakBar, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
             <Feather name="zap" size={14} color={colors.accent} />
             <Text style={[styles.streakText, { color: colors.text }]}>
-              {streak.current_streak}/{streakGoal} days
+              {streak.current_streak} {streak.current_streak === 1 ? 'day' : 'days'}
             </Text>
-            <View style={[styles.streakTrack, { backgroundColor: colors.borderLight }]}>
-              <View style={[styles.streakFill, { width: `${Math.min(1, streak.current_streak / streakGoal) * 100}%` as any, backgroundColor: colors.accent }]} />
-            </View>
+            <Text style={[styles.streakSep, { color: colors.borderLight }]}>|</Text>
             <Text style={[styles.streakBest, { color: colors.textTertiary }]}>Best: {streak.longest_streak}</Text>
           </View>
         )}
@@ -543,7 +544,7 @@ export default function TodayScreen() {
             {goals.length > 0 && (
               <Text style={[styles.progressText, { color: colors.textTertiary }]}>{completedCount}/{goals.length} done</Text>
             )}
-            {goals.length > 0 && (
+            {goals.length > 0 && !alreadyRefreshedToday && (
               <Pressable
                 style={[styles.refreshButton, { borderColor: colors.borderLight }, generating && styles.buttonDisabled]}
                 onPress={() => handleGenerateGoals(true)}
@@ -562,7 +563,7 @@ export default function TodayScreen() {
         {generating ? (
           <View style={[styles.generatingCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Feather name="cpu" size={20} color={colors.textTertiary} />
-            <Text style={[styles.generatingText, { color: colors.textSecondary }]}>AI is generating your goals...</Text>
+            <Text style={[styles.generatingText, { color: colors.textSecondary }]}>Diverge is generating your goals...</Text>
           </View>
         ) : goals.length === 0 && categories.length === 0 ? (
           <View style={styles.emptyState}>
@@ -695,9 +696,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: BorderRadius.sm, paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm + 2, marginBottom: Spacing.md,
   },
-  streakText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, minWidth: 52 },
-  streakTrack: { flex: 1, height: 3, borderRadius: BorderRadius.full, overflow: 'hidden' },
-  streakFill: { height: '100%', borderRadius: BorderRadius.full },
+  streakText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm },
+  streakSep: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, marginHorizontal: 2 },
   streakBest: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 
   coachingCard: {

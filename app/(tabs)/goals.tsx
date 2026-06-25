@@ -35,7 +35,8 @@ export default function GoalsScreen() {
 
   useEffect(() => { loadGoals(); }, [loadGoals]);
 
-  async function toggleGoal(goalId: string, completed: boolean) {
+  async function toggleGoal(goalId: string, completed: boolean, goalDate: string) {
+    if (goalDate !== today) return; // only today's goals can be toggled
     setGoals((prev) => prev.map((g) => (g.id === goalId ? { ...g, completed } : g)));
     await supabase.from('goals').update({ completed }).eq('id', goalId);
   }
@@ -94,20 +95,25 @@ export default function GoalsScreen() {
         </View>
       ) : (
         <View style={styles.goalsList}>
-          {goals.map((goal) => (
+          {goals.map((goal) => {
+            const isPastDay = goal.goal_date !== today;
+            return (
             <Pressable
               key={goal.id}
               style={[
                 styles.goalCard,
                 { backgroundColor: colors.surface, borderColor: colors.border },
                 goal.completed && { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight },
+                isPastDay && { opacity: 0.7 },
               ]}
-              onPress={() => toggleGoal(goal.id, !goal.completed)}
+              onPress={() => !isPastDay && toggleGoal(goal.id, !goal.completed, goal.goal_date)}
+              disabled={isPastDay}
             >
               <View style={[
                 styles.checkbox,
                 { borderColor: colors.border },
                 goal.completed && { backgroundColor: colors.primary, borderColor: colors.primary },
+                isPastDay && !goal.completed && { borderColor: colors.borderLight },
               ]}>
                 {goal.completed && <Feather name="check" size={12} color={colors.textInverse} />}
               </View>
@@ -117,10 +123,13 @@ export default function GoalsScreen() {
                   { color: colors.text },
                   goal.completed && { textDecorationLine: 'line-through', color: colors.textTertiary },
                 ]}>{goal.title}</Text>
-                <Text style={[styles.goalMeta, { color: colors.textTertiary }]}>{goal.goal_date}</Text>
+                <Text style={[styles.goalMeta, { color: colors.textTertiary }]}>
+                  {goal.goal_date}{isPastDay ? ' · past' : ''}
+                </Text>
               </View>
             </Pressable>
-          ))}
+            );
+          })}
         </View>
       )}
     </ScrollView>

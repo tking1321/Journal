@@ -6,11 +6,14 @@ import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
 const OPTIONS = [
-  "I don't know where to start every day",
-  "I keep making the same mistakes",
-  "I feel overwhelmed by my thoughts",
-  "I can't stay consistent with goals",
-  "I don't see progress in my life",
+  "I want to build better daily habits",
+  "I want clarity on what truly matters to me",
+  "I'm ready to take my growth seriously",
+  "I want to track and celebrate real progress",
+  "I don't know where to start each day",
+  "I can't stay consistent with my goals",
+  "I want to understand myself better",
+  "I'm looking for more focus and intention",
 ];
 
 export default function ProblemScreen() {

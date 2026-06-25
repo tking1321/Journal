@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, RefreshControl, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, RefreshControl, Modal, ActivityIndicator, Alert } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
@@ -34,11 +34,20 @@ export default function JournalScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [prompt] = useState(() => PROMPTS[Math.floor(Math.random() * PROMPTS.length)]);
 
-  // Insight modal state
+  // New-entry insight modal
   const [insightVisible, setInsightVisible] = useState(false);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightData, setInsightData] = useState<JournalInsightResult | null>(null);
   const [insightError, setInsightError] = useState<string | null>(null);
+  const [insightEntryId, setInsightEntryId] = useState<string | null>(null);
+
+  // Past-entry detail modal
+  const [entryModalVisible, setEntryModalVisible] = useState(false);
+  const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(null);
+  const [editingContent, setEditingContent] = useState('');
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [entryInsightLoading, setEntryInsightLoading] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -61,10 +70,7 @@ export default function JournalScreen() {
       .insert({ content: content.trim(), entry_date: today })
       .select().maybeSingle();
 
-    if (!savedEntry) {
-      setSaving(false);
-      return;
-    }
+    if (!savedEntry) { setSaving(false); return; }
 
     setEntries((prev) => [savedEntry, ...prev]);
     const savedContent = content.trim();
@@ -73,11 +79,11 @@ export default function JournalScreen() {
     setIsWriting(false);
     setSaving(false);
 
-    // Open modal immediately in loading state, then populate when AI responds
     setInsightData(null);
     setInsightError(null);
     setInsightLoading(true);
     setInsightVisible(true);
+    setInsightEntryId(savedEntry.id);
 
     const { result, error: aiError } = await generateJournalInsight({
       content: savedContent,
@@ -93,7 +99,6 @@ export default function JournalScreen() {
 
     if (result && (result.summary || result.reflection)) {
       setInsightData(result);
-
       const aiSummary = result.summary || null;
       const aiReflection = result.reflection || null;
       const aiNextFocus = result.next_focus || result.action_step || null;
@@ -109,6 +114,82 @@ export default function JournalScreen() {
       ));
     } else {
       setInsightError(aiError ?? 'Could not generate insight. Please try again later.');
+    }
+  }
+
+  function openEntry(entry: JournalEntry) {
+    setSelectedEntry(entry);
+    setEditingContent(entry.content);
+    setIsEditMode(false);
+    setEntryModalVisible(true);
+  }
+
+  async function saveEdit() {
+    if (!selectedEntry || !editingContent.trim()) return;
+    setEditSaving(true);
+    await supabase.from('journal_entries')
+      .update({ content: editingContent.trim() })
+      .eq('id', selectedEntry.id);
+    const updated = { ...selectedEntry, content: editingContent.trim() };
+    setSelectedEntry(updated);
+    setEntries((prev) => prev.map((e) => e.id === selectedEntry.id ? updated : e));
+    setIsEditMode(false);
+    setEditSaving(false);
+  }
+
+  async function deleteEntry() {
+    if (!selectedEntry) return;
+    Alert.alert(
+      'Delete Entry',
+      'Are you sure you want to delete this journal entry? This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: async () => {
+            await supabase.from('journal_entries').delete().eq('id', selectedEntry.id);
+            setEntries((prev) => prev.filter((e) => e.id !== selectedEntry.id));
+            setEntryModalVisible(false);
+            setSelectedEntry(null);
+          },
+        },
+      ]
+    );
+  }
+
+  async function generateEntryInsight() {
+    if (!selectedEntry || entryInsightLoading) return;
+    setEntryInsightLoading(true);
+
+    const recentEntries = entries
+      .filter((e) => e.id !== selectedEntry.id)
+      .slice(0, 2)
+      .map((e) => ({ content: e.content }));
+
+    const { result, error: aiError } = await generateJournalInsight({
+      content: selectedEntry.content,
+      recentEntries,
+      profile: {
+        coaching_style: profile?.coaching_style,
+        user_level: profile?.user_level,
+        total_xp_earned: profile?.total_xp_earned,
+      },
+    });
+
+    setEntryInsightLoading(false);
+
+    if (result && (result.summary || result.reflection)) {
+      const aiSummary = result.summary || null;
+      const aiReflection = result.reflection || null;
+      const aiNextFocus = result.next_focus || result.action_step || null;
+
+      await supabase.from('journal_entries')
+        .update({ ai_summary: aiSummary, ai_reflection: aiReflection, ai_next_focus: aiNextFocus })
+        .eq('id', selectedEntry.id);
+
+      const updated = { ...selectedEntry, ai_summary: aiSummary, ai_reflection: aiReflection, ai_next_focus: aiNextFocus };
+      setSelectedEntry(updated);
+      setEntries((prev) => prev.map((e) => e.id === selectedEntry.id ? updated : e));
     }
   }
 
@@ -163,43 +244,51 @@ export default function JournalScreen() {
         )}
 
         {todayEntry && !isWriting && (
-          <View style={[styles.todayCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Pressable
+            style={[styles.todayCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            onPress={() => openEntry(todayEntry)}
+          >
             <View style={styles.todayHeader}>
               <Feather name="check-circle" size={14} color={colors.success} />
               <Text style={[styles.todayLabel, { color: colors.success }]}>Today's Entry</Text>
+              <View style={styles.todayHeaderRight}>
+                <Feather name="chevron-right" size={14} color={colors.textTertiary} />
+              </View>
             </View>
             <Text style={[styles.todayContent, { color: colors.text }]} numberOfLines={4}>{todayEntry.content}</Text>
             {todayEntry.ai_summary && (
               <View style={[styles.aiSummaryBox, { backgroundColor: colors.surfaceElevated }]}>
-                <Text style={[styles.aiLabel, { color: colors.textTertiary }]}>AI INSIGHT</Text>
-                <Text style={[styles.aiSummaryText, { color: colors.textSecondary }]}>{todayEntry.ai_summary}</Text>
+                <Text style={[styles.aiLabel, { color: colors.textTertiary }]}>DIVERGE INSIGHT</Text>
+                <Text style={[styles.aiSummaryText, { color: colors.textSecondary }]} numberOfLines={2}>{todayEntry.ai_summary}</Text>
               </View>
             )}
-            {todayEntry.ai_reflection && (
-              <View style={[styles.aiSummaryBox, { backgroundColor: colors.surfaceElevated, marginTop: 4 }]}>
-                <Text style={[styles.aiLabel, { color: colors.textTertiary }]}>COACHING</Text>
-                <Text style={[styles.aiSummaryText, { color: colors.textSecondary }]}>{todayEntry.ai_reflection}</Text>
-              </View>
-            )}
-            {todayEntry.ai_next_focus && (
-              <View style={[styles.aiSummaryBox, { backgroundColor: colors.surfaceElevated, marginTop: 4 }]}>
-                <Text style={[styles.aiLabel, { color: colors.textTertiary }]}>NEXT FOCUS</Text>
-                <Text style={[styles.aiSummaryText, { color: colors.textSecondary }]}>{todayEntry.ai_next_focus}</Text>
-              </View>
-            )}
-          </View>
+          </Pressable>
         )}
 
         {entries.length > 0 && (
           <View style={styles.historySection}>
             <Text style={[styles.historyTitle, { color: colors.text }]}>Past Entries</Text>
             {entries.slice(todayEntry ? 1 : 0).map((entry) => (
-              <View key={entry.id} style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
-                <Text style={[styles.entryDate, { color: colors.textTertiary }]}>
-                  {new Date(entry.entry_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                </Text>
+              <Pressable
+                key={entry.id}
+                style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}
+                onPress={() => openEntry(entry)}
+              >
+                <View style={styles.entryCardHeader}>
+                  <Text style={[styles.entryDate, { color: colors.textTertiary }]}>
+                    {new Date(entry.entry_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </Text>
+                  <View style={styles.entryCardRight}>
+                    {entry.ai_summary && (
+                      <View style={[styles.insightDot, { backgroundColor: colors.primary + '30' }]}>
+                        <Feather name="zap" size={9} color={colors.primary} />
+                      </View>
+                    )}
+                    <Feather name="chevron-right" size={14} color={colors.textTertiary} />
+                  </View>
+                </View>
                 <Text style={[styles.entryContent, { color: colors.text }]} numberOfLines={2}>{entry.content}</Text>
-              </View>
+              </Pressable>
             ))}
           </View>
         )}
@@ -219,7 +308,7 @@ export default function JournalScreen() {
         </Pressable>
       )}
 
-      {/* AI Insight Modal */}
+      {/* New-entry Diverge Insight Modal */}
       <Modal
         visible={insightVisible}
         transparent
@@ -232,9 +321,9 @@ export default function JournalScreen() {
 
             <View style={styles.modalHeader}>
               <View style={[styles.modalIconBadge, { backgroundColor: colors.primary + '18' }]}>
-                <Feather name="cpu" size={18} color={colors.primary} />
+                <Feather name="zap" size={18} color={colors.primary} />
               </View>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Your AI Insight</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Diverge Insight</Text>
             </View>
 
             {insightLoading ? (
@@ -248,7 +337,7 @@ export default function JournalScreen() {
                 <Text style={[styles.errorText, { color: colors.textSecondary }]}>{insightError}</Text>
               </View>
             ) : insightData ? (
-              <View style={styles.insightContent}>
+              <ScrollView style={styles.insightScroll} showsVerticalScrollIndicator={false}>
                 {insightData.summary ? (
                   <View style={[styles.insightSection, { borderBottomColor: colors.borderLight }]}>
                     <Text style={[styles.insightSectionLabel, { color: colors.textTertiary }]}>INSIGHT</Text>
@@ -269,7 +358,13 @@ export default function JournalScreen() {
                     </Text>
                   </View>
                 ) : null}
-              </View>
+                {insightData.action_step && insightData.next_focus ? (
+                  <View style={[styles.insightSection, { borderBottomColor: 'transparent' }]}>
+                    <Text style={[styles.insightSectionLabel, { color: colors.textTertiary }]}>ACTION STEP</Text>
+                    <Text style={[styles.insightSectionText, { color: colors.text }]}>{insightData.action_step}</Text>
+                  </View>
+                ) : null}
+              </ScrollView>
             ) : null}
 
             <Pressable
@@ -279,6 +374,148 @@ export default function JournalScreen() {
             >
               <Text style={[styles.modalDoneText, { color: colors.textInverse }]}>Done</Text>
             </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Past-entry Detail Modal */}
+      <Modal
+        visible={entryModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => { setEntryModalVisible(false); setIsEditMode(false); }}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.entryModalSheet, { backgroundColor: colors.surface }]}>
+            <View style={[styles.modalHandle, { backgroundColor: colors.borderLight }]} />
+
+            {/* Entry modal header */}
+            <View style={styles.entryModalHeader}>
+              <View style={styles.entryModalMeta}>
+                <Feather name="calendar" size={13} color={colors.textTertiary} />
+                <Text style={[styles.entryModalDate, { color: colors.textTertiary }]}>
+                  {selectedEntry
+                    ? new Date(selectedEntry.entry_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+                    : ''}
+                </Text>
+              </View>
+              <View style={styles.entryModalActions}>
+                {!isEditMode && (
+                  <>
+                    <Pressable
+                      style={[styles.entryActionBtn, { backgroundColor: colors.surfaceElevated }]}
+                      onPress={() => { setIsEditMode(true); setEditingContent(selectedEntry?.content || ''); }}
+                    >
+                      <Feather name="edit-2" size={14} color={colors.text} />
+                    </Pressable>
+                    <Pressable
+                      style={[styles.entryActionBtn, { backgroundColor: colors.error + '15' }]}
+                      onPress={deleteEntry}
+                    >
+                      <Feather name="trash-2" size={14} color={colors.error} />
+                    </Pressable>
+                  </>
+                )}
+                <Pressable
+                  style={[styles.entryActionBtn, { backgroundColor: colors.surfaceElevated }]}
+                  onPress={() => { setEntryModalVisible(false); setIsEditMode(false); }}
+                >
+                  <Feather name="x" size={16} color={colors.text} />
+                </Pressable>
+              </View>
+            </View>
+
+            <ScrollView style={styles.entryModalScroll} showsVerticalScrollIndicator={false}>
+              {isEditMode ? (
+                <View>
+                  <TextInput
+                    style={[styles.editInput, { color: colors.text, borderColor: colors.primary, backgroundColor: colors.background }]}
+                    value={editingContent}
+                    onChangeText={setEditingContent}
+                    multiline
+                    textAlignVertical="top"
+                    autoFocus
+                    placeholderTextColor={colors.textTertiary}
+                  />
+                  <View style={styles.editActions}>
+                    <Pressable
+                      style={[styles.editCancelBtn, { borderColor: colors.border }]}
+                      onPress={() => { setIsEditMode(false); setEditingContent(selectedEntry?.content || ''); }}
+                    >
+                      <Text style={[styles.editCancelText, { color: colors.textSecondary }]}>Cancel</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.editSaveBtn, { backgroundColor: colors.primary }, (!editingContent.trim() || editSaving) && styles.disabled]}
+                      onPress={saveEdit}
+                      disabled={!editingContent.trim() || editSaving}
+                    >
+                      <Text style={[styles.editSaveText, { color: colors.textInverse }]}>{editSaving ? 'Saving...' : 'Save Changes'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Text style={[styles.entryModalContent, { color: colors.text }]}>{selectedEntry?.content}</Text>
+              )}
+
+              {/* Existing insights */}
+              {!isEditMode && selectedEntry && (selectedEntry.ai_summary || selectedEntry.ai_reflection || selectedEntry.ai_next_focus) ? (
+                <View style={[styles.existingInsights, { borderTopColor: colors.borderLight }]}>
+                  <Text style={[styles.insightSectionLabel, { color: colors.textTertiary }]}>DIVERGE INSIGHTS</Text>
+                  {selectedEntry.ai_summary && (
+                    <View style={[styles.insightBlock, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
+                      <Text style={[styles.insightBlockLabel, { color: colors.textTertiary }]}>INSIGHT</Text>
+                      <Text style={[styles.insightBlockText, { color: colors.text }]}>{selectedEntry.ai_summary}</Text>
+                    </View>
+                  )}
+                  {selectedEntry.ai_reflection && (
+                    <View style={[styles.insightBlock, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
+                      <Text style={[styles.insightBlockLabel, { color: colors.textTertiary }]}>COACHING</Text>
+                      <Text style={[styles.insightBlockText, { color: colors.text }]}>{selectedEntry.ai_reflection}</Text>
+                    </View>
+                  )}
+                  {selectedEntry.ai_next_focus && (
+                    <View style={[styles.insightBlock, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
+                      <Text style={[styles.insightBlockLabel, { color: colors.textTertiary }]}>NEXT FOCUS</Text>
+                      <Text style={[styles.insightBlockText, { color: colors.text }]}>{selectedEntry.ai_next_focus}</Text>
+                    </View>
+                  )}
+                </View>
+              ) : !isEditMode && selectedEntry && !selectedEntry.ai_summary ? (
+                <View style={[styles.existingInsights, { borderTopColor: colors.borderLight }]}>
+                  <Pressable
+                    style={[styles.generateInsightBtn, { backgroundColor: colors.surface, borderColor: colors.borderLight }, entryInsightLoading && styles.disabled]}
+                    onPress={generateEntryInsight}
+                    disabled={entryInsightLoading}
+                  >
+                    {entryInsightLoading ? (
+                      <>
+                        <ActivityIndicator size="small" color={colors.primary} />
+                        <Text style={[styles.generateInsightText, { color: colors.textSecondary }]}>Generating insight...</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Feather name="zap" size={14} color={colors.primary} />
+                        <Text style={[styles.generateInsightText, { color: colors.primary }]}>Generate Diverge Insight</Text>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {/* Re-generate button for entries that already have insights */}
+              {!isEditMode && selectedEntry?.ai_summary && (
+                <Pressable
+                  style={[styles.regenBtn, { borderColor: colors.borderLight }, entryInsightLoading && styles.disabled]}
+                  onPress={generateEntryInsight}
+                  disabled={entryInsightLoading}
+                >
+                  <Feather name="refresh-cw" size={12} color={colors.textTertiary} />
+                  <Text style={[styles.regenBtnText, { color: colors.textTertiary }]}>
+                    {entryInsightLoading ? 'Regenerating...' : 'Regenerate Insight'}
+                  </Text>
+                </Pressable>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -319,6 +556,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.lg,
   },
   todayHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.sm },
+  todayHeaderRight: { flex: 1, alignItems: 'flex-end' },
   todayLabel: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.xs },
   todayContent: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20 },
   aiSummaryBox: {
@@ -331,7 +569,10 @@ const styles = StyleSheet.create({
   entryCard: {
     borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md,
   },
-  entryDate: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, marginBottom: 4 },
+  entryCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  entryCardRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  insightDot: { width: 18, height: 18, borderRadius: 9, justifyContent: 'center', alignItems: 'center' },
+  entryDate: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
   entryContent: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20 },
   emptyState: { alignItems: 'center', paddingVertical: Spacing.xxl, gap: Spacing.sm },
   emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, marginTop: Spacing.sm },
@@ -342,48 +583,70 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8, elevation: 8,
   },
 
-  // Modal
-  modalBackdrop: {
-    flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)',
-  },
+  // New-entry insight modal
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalSheet: {
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 40,
+    maxHeight: '85%',
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 20,
   },
   modalHandle: {
     width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg,
   },
-  modalHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginBottom: Spacing.xl,
-  },
-  modalIconBadge: {
-    width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center',
-  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginBottom: Spacing.xl },
+  modalIconBadge: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   modalTitle: { fontFamily: 'Inter-Bold', fontSize: FontSize.lg },
-  loadingBlock: {
-    alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xxl,
-  },
+  loadingBlock: { alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xxl },
   loadingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm },
-  errorBlock: {
-    alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xl,
-  },
-  errorText: {
-    fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center', lineHeight: 20,
-  },
-  insightContent: { marginBottom: Spacing.lg },
-  insightSection: {
-    paddingVertical: Spacing.md, borderBottomWidth: 1,
-  },
-  insightSectionLabel: {
-    fontFamily: 'Inter-Bold', fontSize: 10, letterSpacing: 1, marginBottom: 6,
-  },
-  insightSectionText: {
-    fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 24,
-  },
+  errorBlock: { alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xl },
+  errorText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center', lineHeight: 20 },
+  insightScroll: { maxHeight: 340, marginBottom: Spacing.md },
+  insightSection: { paddingVertical: Spacing.md, borderBottomWidth: 1 },
+  insightSectionLabel: { fontFamily: 'Inter-Bold', fontSize: 10, letterSpacing: 1, marginBottom: 6 },
+  insightSectionText: { fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 24 },
   modalDoneButton: {
     marginTop: Spacing.md, paddingVertical: 14, borderRadius: BorderRadius.md,
     alignItems: 'center', justifyContent: 'center',
   },
   modalDoneText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
+
+  // Past-entry detail modal
+  entryModalSheet: {
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 40,
+    maxHeight: '90%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 20,
+  },
+  entryModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.lg },
+  entryModalMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, flex: 1 },
+  entryModalDate: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  entryModalActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  entryActionBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  entryModalScroll: { flex: 1 },
+  entryModalContent: { fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 26, marginBottom: Spacing.xl },
+  editInput: {
+    fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 24,
+    borderWidth: 1.5, borderRadius: BorderRadius.md, padding: Spacing.md,
+    minHeight: 160, marginBottom: Spacing.md,
+  },
+  editActions: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.xl },
+  editCancelBtn: { flex: 1, borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: 12, alignItems: 'center' },
+  editCancelText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  editSaveBtn: { flex: 1, borderRadius: BorderRadius.md, paddingVertical: 12, alignItems: 'center' },
+  editSaveText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm },
+  existingInsights: { borderTopWidth: 1, paddingTop: Spacing.lg, gap: Spacing.sm, marginBottom: Spacing.md },
+  insightBlock: { borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md },
+  insightBlockLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 0.8, marginBottom: 6 },
+  insightBlockText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20 },
+  generateInsightBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
+    borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: Spacing.md,
+  },
+  generateInsightText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm },
+  regenBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
+    borderTopWidth: 1, paddingTop: Spacing.md, marginTop: Spacing.sm,
+  },
+  regenBtnText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 });
