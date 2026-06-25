@@ -130,24 +130,6 @@ export default function PreviewScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>YOUR DAILY ROUTINE</Text>
-          <View style={styles.routineCard}>
-            <View style={styles.routineRow}>
-              <Feather name="target" size={14} color={Colors.text} />
-              <Text style={styles.routineText}>1–3 daily Diverge-generated goals</Text>
-            </View>
-            <View style={styles.routineRow}>
-              <Feather name="edit-3" size={14} color={Colors.text} />
-              <Text style={styles.routineText}>{data.timeCommitment} of journaling</Text>
-            </View>
-            <View style={styles.routineRow}>
-              <Feather name="bar-chart-2" size={14} color={Colors.text} />
-              <Text style={styles.routineText}>Weekly Diverge insights on your progress</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.section}>
           <Text style={styles.sectionLabel}>YOUR COACH STYLE</Text>
           <View style={styles.coachCard}>
             <Text style={styles.coachLabel}>
@@ -232,7 +214,6 @@ export default function PreviewScreen() {
               'A coaching voice built from your answers',
               'Streak tracking to stay consistent',
               'Private, secure journal with Diverge insights',
-              'Weekly insights to see what\'s actually working',
             ].map((benefit, i) => (
               <View key={i} style={styles.benefitRow}>
                 <Feather name="check" size={13} color={Colors.text} />

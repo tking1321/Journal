@@ -275,7 +275,7 @@ export default function InsightsScreen() {
             const dateStr = `${calendarYear}-${mm}-${dd}`;
             const dayData = calendarDays.find((d) => d.date === dateStr);
             const isCompleted = dayData?.complete ?? false;
-            const isToday = dayNum === dayOfMonth;
+            const isToday = dateStr === today;
             const isFuture = dateStr > today;
             return (
               <View

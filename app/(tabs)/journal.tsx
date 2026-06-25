@@ -303,8 +303,8 @@ export default function JournalScreen() {
       </ScrollView>
 
       {!isWriting && todayEntry && (
-        <Pressable style={[styles.fab, { backgroundColor: colors.primary }]} onPress={() => setIsWriting(true)}>
-          <Feather name="plus" size={22} color={colors.textInverse} />
+        <Pressable style={[styles.fab, { backgroundColor: colors.primary }]} onPress={() => openEntry(todayEntry)}>
+          <Feather name="edit-2" size={20} color={colors.textInverse} />
         </Pressable>
       )}
 

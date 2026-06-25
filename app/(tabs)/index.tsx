@@ -163,7 +163,10 @@ export default function TodayScreen() {
     const lastType = (profile as Record<string, unknown>)?.last_ai_request_type as string | null;
     const lastDate = (profile as Record<string, unknown>)?.last_ai_request_date as string | null;
 
-    if (lastDate === today && cachedResponse) {
+    // Restore coaching note if it was generated today
+    if (profile?.last_coaching_generation_date === today && profile?.last_coaching_note) {
+      setCoachNote(profile.last_coaching_note);
+    } else if (lastDate === today && cachedResponse) {
       if (lastType === 'today_coaching') {
         if (cachedResponse.coach_note) setCoachNote(cachedResponse.coach_note as string);
         if (cachedResponse.next_focus) setNextFocus(cachedResponse.next_focus as string);
@@ -207,13 +210,19 @@ export default function TodayScreen() {
     }
   }, [loading, goals.length, categories.length, generating]);
 
-  // Auto-fetch coaching once per session if not loaded
+  // Auto-fetch coaching once per day if not yet done today
   useEffect(() => {
-    if (!loading && !coachNote && !coachingLoading && !coachAutoRef.current && user) {
-      coachAutoRef.current = true;
-      handleGetCoaching();
+    if (!loading && !coachingLoading && !coachAutoRef.current && user) {
+      if (profile?.last_coaching_generation_date === today) {
+        coachAutoRef.current = true;
+        return;
+      }
+      if (!coachNote) {
+        coachAutoRef.current = true;
+        handleGetCoaching();
+      }
     }
-  }, [loading, coachNote, coachingLoading]);
+  }, [loading, coachNote, coachingLoading, profile?.last_coaching_generation_date]);
 
   async function upsertRing(updates: Partial<DailyRing>): Promise<DailyRing> {
     const current = rings;
@@ -372,10 +381,11 @@ export default function TodayScreen() {
   async function handleGetCoaching() {
     if (coachingLoading) return;
     if (!user) return;
+    if (profile?.last_coaching_generation_date === today) return;
 
     setCoachingLoading(true);
     try {
-      const { result, error: aiError } = await generateTodayCoaching({
+      const { result } = await generateTodayCoaching({
         recentEntries,
         profile: {
           coaching_style: profile?.coaching_style,
@@ -388,6 +398,12 @@ export default function TodayScreen() {
         if (result.coach_note) setCoachNote(result.coach_note);
         if (result.next_focus) setNextFocus(result.next_focus);
         if (result.insight) setAiInsight(result.insight);
+
+        await supabase.from('profiles').update({
+          last_coaching_generation_date: today,
+          last_coaching_note: result.coach_note || null,
+        }).eq('id', user.id);
+        await refreshProfile();
       }
     } finally {
       setCoachingLoading(false);
@@ -417,7 +433,10 @@ export default function TodayScreen() {
     setGoalModalVisible(true);
   }
 
-  function closeGoalModal() {
+  async function closeGoalModal() {
+    if (selectedGoal && goalComment.trim() !== (selectedGoal.user_note || '')) {
+      await saveGoalNote();
+    }
     setGoalModalVisible(false);
     setSelectedGoal(null);
     setGoalComment('');
@@ -426,6 +445,12 @@ export default function TodayScreen() {
   async function handleCompleteFromModal(completed: boolean) {
     if (!selectedGoal || !user) return;
     const goal = selectedGoal;
+
+    // Save note if changed before completing
+    if (goalComment.trim() !== (goal.user_note || '')) {
+      await saveGoalNote();
+    }
+
     const updated = { ...goal, completed };
     setSelectedGoal(updated);
     setGoals((prev) => prev.map((g) => g.id === goal.id ? updated : g));
