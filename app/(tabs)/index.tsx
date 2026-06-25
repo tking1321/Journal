@@ -1,5 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Animated } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, Pressable, RefreshControl,
+  Animated, Modal, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
@@ -16,6 +20,7 @@ interface Goal {
   goal_date: string;
   difficulty: string;
   xp_value: number;
+  user_note: string | null;
 }
 
 interface Category {
@@ -53,9 +58,7 @@ function getThresholdForLevel(level: number): number {
   const lastBase = LEVEL_THRESHOLDS[LEVEL_THRESHOLDS.length - 1];
   const extra = level - LEVEL_THRESHOLDS.length;
   let sum = lastBase;
-  for (let i = 0; i < extra; i++) {
-    sum += 40 + (LEVEL_THRESHOLDS.length + i) * 5;
-  }
+  for (let i = 0; i < extra; i++) sum += 40 + (LEVEL_THRESHOLDS.length + i) * 5;
   return sum;
 }
 
@@ -69,28 +72,18 @@ function getXpInCurrentLevel(totalXp: number, level: number): number {
 
 function calculateLevel(totalXp: number): number {
   let lvl = 1;
-  while (getThresholdForLevel(lvl + 1) <= totalXp) {
-    lvl++;
-  }
+  while (getThresholdForLevel(lvl + 1) <= totalXp) lvl++;
   return lvl;
 }
 
 const DIFFICULTY_COLORS: Record<string, string> = {
-  easy: '#1D6A3A',
-  medium: '#A0620A',
-  hard: '#C0392B',
+  easy: '#1D6A3A', medium: '#A0620A', hard: '#C0392B',
 };
-
 const DIFFICULTY_BG_LIGHT: Record<string, string> = {
-  easy: '#EDF5F0',
-  medium: '#FFF4E6',
-  hard: '#FDE8E6',
+  easy: '#EDF5F0', medium: '#FFF4E6', hard: '#FDE8E6',
 };
-
 const DIFFICULTY_BG_DARK: Record<string, string> = {
-  easy: '#1a2e20',
-  medium: '#2e2010',
-  hard: '#2e1210',
+  easy: '#1a2e20', medium: '#2e2010', hard: '#2e1210',
 };
 
 export default function TodayScreen() {
@@ -111,6 +104,16 @@ export default function TodayScreen() {
   const [xpGain, setXpGain] = useState<{ amount: number; visible: boolean }>({ amount: 0, visible: false });
   const [recentEntries, setRecentEntries] = useState<{ content: string; entry_date: string }[]>([]);
   const celebrationOpacity = useRef(new Animated.Value(0)).current;
+
+  // Goal modal
+  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
+  const [goalModalVisible, setGoalModalVisible] = useState(false);
+  const [goalComment, setGoalComment] = useState('');
+  const [goalRegenerating, setGoalRegenerating] = useState(false);
+
+  // Auto-gen guards
+  const goalAutoRef = useRef(false);
+  const coachAutoRef = useRef(false);
 
   const today = new Date().toISOString().split('T')[0];
   const thisMonth = today.slice(0, 7);
@@ -141,9 +144,7 @@ export default function TodayScreen() {
     setStreak(fetchedStreak);
     setRecentEntries(entries);
 
-    if (fetchedRings) {
-      setRings(fetchedRings);
-    }
+    if (fetchedRings) setRings(fetchedRings);
 
     const hasJournalToday = entries.some((e) => e.entry_date === today);
     if (hasJournalToday && fetchedRings && !fetchedRings.journal_done) {
@@ -158,7 +159,6 @@ export default function TodayScreen() {
       }
     }
 
-    // Load cached AI coaching from profile
     const cachedResponse = profile?.last_ai_response_json as Record<string, unknown> | null;
     const lastType = (profile as Record<string, unknown>)?.last_ai_request_type as string | null;
     const lastDate = (profile as Record<string, unknown>)?.last_ai_request_date as string | null;
@@ -177,17 +177,53 @@ export default function TodayScreen() {
     setLoading(false);
   }, [user, profile, today]);
 
+  // Refresh journal ring whenever Today tab comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      async function checkJournalRing() {
+        const [journalRes, ringsRes] = await Promise.all([
+          supabase.from('journal_entries').select('entry_date').eq('entry_date', today).limit(1),
+          supabase.from('daily_rings').select('*').eq('ring_date', today).maybeSingle(),
+        ]);
+        const hasJournal = (journalRes.data || []).length > 0;
+        const freshRings = ringsRes.data;
+        if (freshRings) {
+          setRings(freshRings);
+          if (hasJournal && !freshRings.journal_done) {
+            await updateRing({ journal_done: true }, freshRings);
+          }
+        }
+      }
+      checkJournalRing();
+    }, [user, today])
+  );
+
+  // Auto-generate goals once per day if none exist
+  useEffect(() => {
+    if (!loading && goals.length === 0 && categories.length > 0 && !generating && !goalAutoRef.current) {
+      goalAutoRef.current = true;
+      handleGenerateGoals(false);
+    }
+  }, [loading, goals.length, categories.length, generating]);
+
+  // Auto-fetch coaching once per session if not loaded
+  useEffect(() => {
+    if (!loading && !coachNote && !coachingLoading && !coachAutoRef.current && user) {
+      coachAutoRef.current = true;
+      handleGetCoaching();
+    }
+  }, [loading, coachNote, coachingLoading]);
+
   async function upsertRing(updates: Partial<DailyRing>): Promise<DailyRing> {
     const current = rings;
     const merged = { ...current, ...updates };
     const allDone = merged.journal_done && merged.goals_done;
     const wasDayComplete = current.day_complete;
-
     merged.day_complete = allDone;
 
     await supabase.from('daily_rings').upsert({
-      ring_date: today,
-      ...merged,
+      ring_date: today, ...merged,
     }, { onConflict: 'user_id,ring_date' });
 
     setRings(merged);
@@ -196,7 +232,6 @@ export default function TodayScreen() {
       triggerCelebration();
       await handleDayComplete();
     }
-
     return merged;
   }
 
@@ -207,8 +242,7 @@ export default function TodayScreen() {
     merged.day_complete = allDone;
 
     await supabase.from('daily_rings').upsert({
-      ring_date: today,
-      ...merged,
+      ring_date: today, ...merged,
     }, { onConflict: 'user_id,ring_date' });
 
     setRings(merged);
@@ -243,8 +277,7 @@ export default function TodayScreen() {
       .select('buildings_count').eq('month_year', thisMonth).maybeSingle();
 
     if (island) {
-      await supabase.from('island_progress').update({ buildings_count: island.buildings_count + 1 })
-        .eq('month_year', thisMonth);
+      await supabase.from('island_progress').update({ buildings_count: island.buildings_count + 1 }).eq('month_year', thisMonth);
     } else {
       await supabase.from('island_progress').insert({ month_year: thisMonth, buildings_count: 1 });
     }
@@ -254,17 +287,14 @@ export default function TodayScreen() {
 
   async function checkAchievements(currentStreak: number, longestStreak: number) {
     if (!user) return;
-
-    const milestones: Array<{ key: string; label: string; threshold: number }> = [
+    const milestones = [
       { key: 'streak_7', label: 'First 7-day streak unlocked', threshold: 7 },
       { key: 'streak_14', label: '14-day streak — momentum is real', threshold: 14 },
       { key: 'streak_30', label: '30-day streak — exceptional consistency', threshold: 30 },
     ];
-
     for (const m of milestones) {
       if (currentStreak === m.threshold || (longestStreak === m.threshold && currentStreak >= m.threshold)) {
-        const { data: existing } = await supabase.from('achievements')
-          .select('key').eq('key', m.key).maybeSingle();
+        const { data: existing } = await supabase.from('achievements').select('key').eq('key', m.key).maybeSingle();
         if (!existing) {
           await supabase.from('achievements').insert({ key: m.key, label: m.label });
           setNewAchievement({ key: m.key, label: m.label, unlocked_at: new Date().toISOString() });
@@ -284,16 +314,12 @@ export default function TodayScreen() {
       if (isRefresh) {
         await supabase.from('goals').delete().eq('goal_date', today).eq('user_id', user.id);
         setGoals([]);
-        // Track refresh date so it can only happen once per day
         await supabase.from('profiles').update({ last_goal_refresh_date: today }).eq('id', user.id);
         await refreshProfile();
       }
 
       const { data: previousGoals } = await supabase
-        .from('goals')
-        .select('title, completed, difficulty')
-        .order('created_at', { ascending: false })
-        .limit(12);
+        .from('goals').select('title, completed, difficulty').order('created_at', { ascending: false }).limit(12);
 
       const aiParams = {
         categories,
@@ -311,9 +337,7 @@ export default function TodayScreen() {
         },
       };
 
-      const result = isRefresh
-        ? await refreshDailyGoals(aiParams)
-        : await generateDailyGoals(aiParams);
+      const result = isRefresh ? await refreshDailyGoals(aiParams) : await generateDailyGoals(aiParams);
 
       if (result && result.daily_goals && result.daily_goals.length > 0) {
         const inserts = result.daily_goals.map((g) => ({
@@ -364,8 +388,6 @@ export default function TodayScreen() {
         if (result.coach_note) setCoachNote(result.coach_note);
         if (result.next_focus) setNextFocus(result.next_focus);
         if (result.insight) setAiInsight(result.insight);
-      } else {
-        setCoachNote(`Diverge error: ${aiError ?? 'unknown error'}`);
       }
     } finally {
       setCoachingLoading(false);
@@ -374,44 +396,56 @@ export default function TodayScreen() {
 
   async function awardXp(xpAmount: number) {
     if (!user || !profile) return;
-
     const newTotal = (profile.total_xp_earned || 0) + xpAmount;
     const newLevel = calculateLevel(newTotal);
-
     await supabase.from('profiles').update({
       current_xp: getXpInCurrentLevel(newTotal, newLevel),
       total_xp_earned: newTotal,
       user_level: newLevel,
     }).eq('id', user.id);
-
     setXpGain({ amount: xpAmount, visible: true });
     setTimeout(() => setXpGain({ amount: 0, visible: false }), 2000);
-
     await refreshProfile();
   }
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  async function toggleGoal(goalId: string, completed: boolean) {
-    const goal = goals.find(g => g.id === goalId);
-    const updated = goals.map((g) => (g.id === goalId ? { ...g, completed } : g));
-    setGoals(updated);
-    await supabase.from('goals').update({ completed }).eq('id', goalId);
+  // ── Goal modal functions ──────────────────────────────────────
+  function openGoalModal(goal: Goal) {
+    setSelectedGoal(goal);
+    setGoalComment(goal.user_note || '');
+    setGoalModalVisible(true);
+  }
 
-    if (completed && goal) {
+  function closeGoalModal() {
+    setGoalModalVisible(false);
+    setSelectedGoal(null);
+    setGoalComment('');
+  }
+
+  async function handleCompleteFromModal(completed: boolean) {
+    if (!selectedGoal || !user) return;
+    const goal = selectedGoal;
+    const updated = { ...goal, completed };
+    setSelectedGoal(updated);
+    setGoals((prev) => prev.map((g) => g.id === goal.id ? updated : g));
+    await supabase.from('goals').update({ completed }).eq('id', goal.id);
+
+    if (completed) {
       await awardXp(goal.xp_value);
-    } else if (!completed && goal) {
+    } else {
       const newTotal = Math.max(0, (profile?.total_xp_earned || 0) - goal.xp_value);
       const newLevel = calculateLevel(newTotal);
       await supabase.from('profiles').update({
         current_xp: getXpInCurrentLevel(newTotal, newLevel),
         total_xp_earned: newTotal,
         user_level: newLevel,
-      }).eq('id', user!.id);
+      }).eq('id', user.id);
       await refreshProfile();
     }
 
-    const allDone = updated.every((g) => g.completed) && updated.length > 0;
+    const updatedGoals = goals.map((g) => g.id === goal.id ? updated : g);
+    const allDone = updatedGoals.every((g) => g.completed) && updatedGoals.length > 0;
     if (allDone && !rings.goals_done) {
       await upsertRing({ goals_done: true });
     } else if (!allDone && rings.goals_done) {
@@ -419,8 +453,68 @@ export default function TodayScreen() {
     }
   }
 
+  async function saveGoalNote() {
+    if (!selectedGoal) return;
+    const note = goalComment.trim();
+    await supabase.from('goals').update({ user_note: note || null }).eq('id', selectedGoal.id);
+    const updated = { ...selectedGoal, user_note: note || null };
+    setSelectedGoal(updated);
+    setGoals((prev) => prev.map((g) => g.id === selectedGoal.id ? updated : g));
+  }
+
+  async function regenerateSingleGoal() {
+    if (!selectedGoal || goalRegenerating || !user) return;
+    setGoalRegenerating(true);
+
+    // Save note first if changed
+    if (goalComment.trim() !== (selectedGoal.user_note || '')) {
+      await saveGoalNote();
+    }
+
+    const goalId = selectedGoal.id;
+    await supabase.from('goals').delete().eq('id', goalId);
+    setGoals((prev) => prev.filter((g) => g.id !== goalId));
+
+    const { data: previousGoals } = await supabase
+      .from('goals').select('title, completed, difficulty').order('created_at', { ascending: false }).limit(12);
+
+    const result = await refreshDailyGoals({
+      categories,
+      recentEntries,
+      previousGoals: previousGoals || [],
+      streakData: streak ? { current_streak: streak.current_streak, longest_streak: streak.longest_streak } : null,
+      profile: {
+        coaching_style: profile?.coaching_style,
+        journaling_style: profile?.journaling_style,
+        biggest_obstacle: profile?.biggest_obstacle,
+        success_vision: profile?.success_vision,
+        user_level: profile?.user_level,
+        total_xp_earned: profile?.total_xp_earned,
+        daily_goal_limit: 1,
+      },
+    });
+
+    if (result && result.daily_goals && result.daily_goals.length > 0) {
+      const g = result.daily_goals[0];
+      const { data: newGoal } = await supabase.from('goals').insert({
+        title: g.text,
+        description: '',
+        goal_date: today,
+        category_id: categories.find((c) => c.name === g.categoryName)?.id || null,
+        difficulty: g.difficulty || 'easy',
+        xp_value: g.xp || 5,
+      }).select().maybeSingle();
+      if (newGoal) setGoals((prev) => [...prev, newGoal]);
+    }
+
+    setGoalRegenerating(false);
+    closeGoalModal();
+  }
+
   async function onRefresh() {
     setRefreshing(true);
+    goalAutoRef.current = false;
+    coachAutoRef.current = false;
     await loadData();
     setRefreshing(false);
   }
@@ -454,7 +548,7 @@ export default function TodayScreen() {
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </Text>
 
-        {/* Level & XP Card */}
+        {/* Level & XP */}
         <View style={[styles.levelCard, { backgroundColor: colors.surface, borderColor: colors.accent + '40' }]}>
           <View style={styles.levelHeader}>
             <View style={[styles.levelBadge, { backgroundColor: colors.primary }]}>
@@ -472,11 +566,7 @@ export default function TodayScreen() {
 
         {/* Completion Rings */}
         <View style={[styles.ringsCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
-          <CompletionRings
-            journal={rings.journal_done}
-            goals={rings.goals_done}
-            goalProgress={goalProgress}
-          />
+          <CompletionRings journal={rings.journal_done} goals={rings.goals_done} goalProgress={goalProgress} />
           {rings.day_complete ? (
             <View style={styles.dayCompleteRow}>
               <Feather name="check-circle" size={14} color={colors.success} />
@@ -487,7 +577,7 @@ export default function TodayScreen() {
           )}
         </View>
 
-        {/* Streak bar */}
+        {/* Streak */}
         {streak && (
           <View style={[styles.streakBar, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
             <Feather name="zap" size={14} color={colors.accent} />
@@ -499,8 +589,13 @@ export default function TodayScreen() {
           </View>
         )}
 
-        {/* AI Coaching Section */}
-        {coachNote ? (
+        {/* Coaching */}
+        {coachingLoading ? (
+          <View style={[styles.coachingLoading, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={[styles.coachingLoadingText, { color: colors.textSecondary }]}>Getting your daily insight...</Text>
+          </View>
+        ) : coachNote ? (
           <View style={[styles.coachingCard, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }]}>
             <Text style={[styles.coachingLabel, { color: colors.textTertiary }]}>TODAY'S COACHING</Text>
             <Text style={[styles.coachingText, { color: colors.text }]}>{coachNote}</Text>
@@ -517,25 +612,7 @@ export default function TodayScreen() {
               </View>
             ) : null}
           </View>
-        ) : (
-          <Pressable
-            style={[styles.coachingButton, { backgroundColor: colors.surface, borderColor: colors.borderLight }, coachingLoading && styles.buttonDisabled]}
-            onPress={handleGetCoaching}
-            disabled={coachingLoading}
-          >
-            {coachingLoading ? (
-              <>
-                <Feather name="cpu" size={14} color={colors.textTertiary} />
-                <Text style={[styles.coachingButtonText, { color: colors.textSecondary }]}>Getting insight...</Text>
-              </>
-            ) : (
-              <>
-                <Feather name="sun" size={14} color={colors.accent} />
-                <Text style={[styles.coachingButtonText, { color: colors.text }]}>Get Today's Insight</Text>
-              </>
-            )}
-          </Pressable>
-        )}
+        ) : null}
 
         {/* Goals header */}
         <View style={styles.sectionHeader}>
@@ -552,7 +629,7 @@ export default function TodayScreen() {
               >
                 <Feather name="refresh-cw" size={12} color={generating ? colors.textTertiary : colors.textSecondary} />
                 <Text style={[styles.refreshButtonText, { color: generating ? colors.textTertiary : colors.textSecondary }]}>
-                  {generating ? 'Refreshing...' : 'Refresh'}
+                  {generating ? 'Refreshing...' : 'Refresh all'}
                 </Text>
               </Pressable>
             )}
@@ -562,7 +639,7 @@ export default function TodayScreen() {
         {/* Goals content */}
         {generating ? (
           <View style={[styles.generatingCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Feather name="cpu" size={20} color={colors.textTertiary} />
+            <ActivityIndicator size="small" color={colors.primary} />
             <Text style={[styles.generatingText, { color: colors.textSecondary }]}>Diverge is generating your goals...</Text>
           </View>
         ) : goals.length === 0 && categories.length === 0 ? (
@@ -571,17 +648,6 @@ export default function TodayScreen() {
             <Text style={[styles.emptyTitle, { color: colors.text }]}>No categories yet</Text>
             <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>Add categories in the Profile tab to generate daily goals</Text>
           </View>
-        ) : goals.length === 0 ? (
-          <Pressable
-            style={[styles.generateButton, { backgroundColor: colors.primary }, generating && styles.buttonDisabled]}
-            onPress={() => handleGenerateGoals(false)}
-            disabled={generating}
-          >
-            <Feather name="zap" size={16} color={colors.textInverse} />
-            <Text style={[styles.generateButtonText, { color: colors.textInverse }]}>
-              Generate Today's Goals
-            </Text>
-          </Pressable>
         ) : (
           <View style={styles.goalsList}>
             {goals.map((goal) => (
@@ -592,7 +658,7 @@ export default function TodayScreen() {
                   { backgroundColor: colors.surface, borderColor: colors.border },
                   goal.completed && { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight },
                 ]}
-                onPress={() => toggleGoal(goal.id, !goal.completed)}
+                onPress={() => openGoalModal(goal)}
               >
                 <View style={[
                   styles.checkbox,
@@ -606,11 +672,9 @@ export default function TodayScreen() {
                     styles.goalTitle,
                     { color: colors.text },
                     goal.completed && { textDecorationLine: 'line-through', color: colors.textTertiary },
-                  ]}>
-                    {goal.title}
-                  </Text>
-                  {goal.description ? (
-                    <Text style={[styles.goalDesc, { color: colors.textSecondary }]}>{goal.description}</Text>
+                  ]}>{goal.title}</Text>
+                  {goal.user_note ? (
+                    <Text style={[styles.goalNote, { color: colors.textTertiary }]} numberOfLines={1}>{goal.user_note}</Text>
                   ) : null}
                   <View style={styles.goalMeta}>
                     <View style={[styles.difficultyBadge, { backgroundColor: diffBg[goal.difficulty] || diffBg.easy }]}>
@@ -621,19 +685,19 @@ export default function TodayScreen() {
                     <Text style={[styles.xpValueText, { color: colors.accent }]}>+{goal.xp_value} XP</Text>
                   </View>
                 </View>
+                <Feather name="chevron-right" size={16} color={colors.textTertiary} />
               </Pressable>
             ))}
           </View>
         )}
 
-        {/* Monthly chapter hint */}
         <View style={styles.islandHint}>
           <Feather name="map" size={13} color={colors.textTertiary} />
           <Text style={[styles.islandHintText, { color: colors.textTertiary }]}>Day {dayOfMonth}/30 of this month's chapter</Text>
         </View>
       </ScrollView>
 
-      {/* XP gain toast */}
+      {/* XP toast */}
       {xpGain.visible && (
         <View style={[styles.xpToast, { backgroundColor: colors.surface, borderColor: colors.accent + '60' }]}>
           <Feather name="trending-up" size={14} color={colors.accent} />
@@ -659,6 +723,101 @@ export default function TodayScreen() {
           <Text style={[styles.achievementText, { color: colors.textInverse }]}>{newAchievement.label}</Text>
         </View>
       )}
+
+      {/* Goal Detail Modal */}
+      <Modal
+        visible={goalModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeGoalModal}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={[styles.goalModalSheet, { backgroundColor: colors.surface }]}>
+            <View style={[styles.modalHandle, { backgroundColor: colors.borderLight }]} />
+
+            {/* Modal header */}
+            <View style={styles.goalModalHeader}>
+              <Text style={[styles.goalModalTitle, { color: colors.text }]} numberOfLines={2}>
+                {selectedGoal?.title}
+              </Text>
+              <Pressable
+                style={[styles.closeBtn, { backgroundColor: colors.surfaceElevated }]}
+                onPress={closeGoalModal}
+              >
+                <Feather name="x" size={16} color={colors.text} />
+              </Pressable>
+            </View>
+
+            {/* Badges */}
+            {selectedGoal && (
+              <View style={styles.goalBadgeRow}>
+                <View style={[styles.difficultyBadge, { backgroundColor: diffBg[selectedGoal.difficulty] || diffBg.easy }]}>
+                  <Text style={[styles.difficultyText, { color: DIFFICULTY_COLORS[selectedGoal.difficulty] || DIFFICULTY_COLORS.easy }]}>
+                    {selectedGoal.difficulty}
+                  </Text>
+                </View>
+                <Text style={[styles.xpValueText, { color: colors.accent }]}>+{selectedGoal.xp_value} XP</Text>
+              </View>
+            )}
+
+            {/* Comment field */}
+            <Text style={[styles.commentLabel, { color: colors.textTertiary }]}>YOUR REFLECTION</Text>
+            <TextInput
+              style={[styles.commentInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+              placeholder="Add a note or reflection about this goal..."
+              placeholderTextColor={colors.textTertiary}
+              value={goalComment}
+              onChangeText={setGoalComment}
+              multiline
+              textAlignVertical="top"
+              onBlur={saveGoalNote}
+            />
+
+            {/* Actions */}
+            <View style={styles.goalModalActions}>
+              <Pressable
+                style={[styles.regenBtn, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }, goalRegenerating && styles.buttonDisabled]}
+                onPress={regenerateSingleGoal}
+                disabled={goalRegenerating}
+              >
+                {goalRegenerating ? (
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                ) : (
+                  <Feather name="refresh-cw" size={14} color={colors.textSecondary} />
+                )}
+                <Text style={[styles.regenBtnText, { color: colors.textSecondary }]}>
+                  {goalRegenerating ? 'Regenerating...' : 'New Goal'}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.completeBtn,
+                  selectedGoal?.completed
+                    ? { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }
+                    : { backgroundColor: colors.primary },
+                ]}
+                onPress={() => handleCompleteFromModal(!selectedGoal?.completed)}
+              >
+                <Feather
+                  name={selectedGoal?.completed ? 'x-circle' : 'check-circle'}
+                  size={16}
+                  color={selectedGoal?.completed ? colors.textSecondary : colors.textInverse}
+                />
+                <Text style={[
+                  styles.completeBtnText,
+                  { color: selectedGoal?.completed ? colors.textSecondary : colors.textInverse },
+                ]}>
+                  {selectedGoal?.completed ? 'Mark Incomplete' : 'Complete Goal'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -672,9 +831,7 @@ const styles = StyleSheet.create({
   greeting: { fontFamily: 'Inter-Bold', fontSize: FontSize.xxl },
   date: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, marginTop: 4, marginBottom: Spacing.lg },
 
-  levelCard: {
-    borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md,
-  },
+  levelCard: { borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md },
   levelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm },
   levelBadge: { paddingHorizontal: Spacing.sm + 4, paddingVertical: 4, borderRadius: BorderRadius.sm },
   levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: 12, letterSpacing: 0.5 },
@@ -700,22 +857,20 @@ const styles = StyleSheet.create({
   streakSep: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, marginHorizontal: 2 },
   streakBest: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
 
-  coachingCard: {
+  coachingLoading: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.lg,
+    justifyContent: 'center',
   },
+  coachingLoadingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm },
+
+  coachingCard: { borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.lg },
   coachingLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 8 },
   coachingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 22 },
   nextFocusRow: { borderTopWidth: 1, marginTop: Spacing.md, paddingTop: Spacing.md },
   nextFocusLabel: { fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 1, marginBottom: 4 },
   nextFocusText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, lineHeight: 20 },
   insightText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20, fontStyle: 'italic' },
-
-  coachingButton: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md,
-    marginBottom: Spacing.lg, justifyContent: 'center',
-  },
-  coachingButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
   sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
@@ -729,28 +884,21 @@ const styles = StyleSheet.create({
   },
   refreshButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
 
-  generateButton: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: Spacing.sm, borderRadius: BorderRadius.md,
-    paddingVertical: Spacing.md + 2, marginBottom: Spacing.md,
-  },
-  generateButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
-
   buttonDisabled: { opacity: 0.45 },
 
   goalsList: { gap: Spacing.sm },
   goalCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     padding: Spacing.md, borderRadius: BorderRadius.md, borderWidth: 1,
   },
   checkbox: {
     width: 22, height: 22, borderRadius: 11, borderWidth: 1.5,
-    justifyContent: 'center', alignItems: 'center', marginTop: 2,
+    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
   },
   goalContent: { flex: 1 },
   goalTitle: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, lineHeight: 22 },
-  goalDesc: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 4, lineHeight: 18 },
-  goalMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 8 },
+  goalNote: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, marginTop: 2, fontStyle: 'italic' },
+  goalMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 6 },
   difficultyBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: BorderRadius.sm },
   difficultyText: { fontFamily: 'Inter-SemiBold', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
   xpValueText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.xs },
@@ -793,4 +941,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
   },
   achievementText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, flex: 1 },
+
+  // Goal modal
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
+  goalModalSheet: {
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 40,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 20,
+  },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg },
+  goalModalHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm, marginBottom: Spacing.sm },
+  goalModalTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.lg, lineHeight: 26, flex: 1 },
+  closeBtn: { width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  goalBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.lg },
+  commentLabel: { fontFamily: 'Inter-Bold', fontSize: 10, letterSpacing: 1, marginBottom: Spacing.sm },
+  commentInput: {
+    borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.md,
+    fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 22,
+    minHeight: 80, marginBottom: Spacing.lg,
+  },
+  goalModalActions: { flexDirection: 'row', gap: Spacing.sm },
+  regenBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
+    borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: 12,
+  },
+  regenBtnText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  completeBtn: {
+    flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
+    borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: 12,
+    borderColor: 'transparent',
+  },
+  completeBtnText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm },
 });

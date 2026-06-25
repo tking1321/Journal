@@ -5,6 +5,17 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useEffect } from 'react';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
+import Svg, { Path, Line } from 'react-native-svg';
+
+function DivergeLogo({ size = 22, color = 'white' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 36 36">
+      <Line x1="3" y1="28" x2="14" y2="28" stroke={color} strokeWidth="3" strokeLinecap="round" />
+      <Path d="M14,28 C16,26 24,16 33,5" stroke={color} strokeWidth="3" strokeLinecap="round" fill="none" />
+      <Path d="M27,4 L33,5 L31,11" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </Svg>
+  );
+}
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -36,22 +47,22 @@ export default function WelcomeScreen() {
       <View style={styles.content}>
         <View style={styles.logoContainer}>
           <View style={[styles.logoMark, { backgroundColor: colors.primary }]}>
-            <Text style={[styles.logoChar, { color: colors.textInverse }]}>G</Text>
+            <DivergeLogo size={22} color={colors.textInverse} />
           </View>
-          <Text style={[styles.logoName, { color: colors.text }]}>Grow</Text>
+          <Text style={[styles.logoName, { color: colors.text }]}>Diverge</Text>
         </View>
 
         <View style={styles.heroSection}>
           <Text style={[styles.heroTitle, { color: colors.text }]}>Build the person{'\n'}you intend to be.</Text>
           <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
-            Daily AI-powered goals, guided journaling, and streak-based accountability — built for ambitious people.
+            Daily personalized goals, guided journaling, and streak-based accountability — built for ambitious people.
           </Text>
         </View>
 
         <View style={styles.features}>
           {[
             { icon: 'target', text: 'Personalized daily goals from your categories' },
-            { icon: 'edit-3', text: 'AI reflections that sharpen your thinking' },
+            { icon: 'edit-3', text: 'Diverge insights that sharpen your thinking' },
             { icon: 'trending-up', text: 'Streak tracking to reinforce consistency' },
           ].map((feature, i) => (
             <View key={i} style={styles.featureRow}>
@@ -86,10 +97,9 @@ const styles = StyleSheet.create({
   content: { flex: 1, justifyContent: 'center' },
   logoContainer: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.xxl },
   logoMark: {
-    width: 36, height: 36, borderRadius: 8,
+    width: 40, height: 40, borderRadius: 10,
     justifyContent: 'center', alignItems: 'center',
   },
-  logoChar: { fontFamily: 'Inter-Bold', fontSize: 20 },
   logoName: { fontFamily: 'Inter-Bold', fontSize: FontSize.xl },
   heroSection: { marginBottom: Spacing.xl },
   heroTitle: {

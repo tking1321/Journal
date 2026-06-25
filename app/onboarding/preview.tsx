@@ -245,7 +245,7 @@ export default function PreviewScreen() {
 
       <View style={styles.footer}>
         <Pressable style={styles.ctaButton} onPress={handleContinue}>
-          <Text style={styles.ctaText}>Continue to Premium</Text>
+          <Text style={styles.ctaText}>Continue</Text>
           <Feather name="arrow-right" size={16} color={Colors.textInverse} />
         </Pressable>
       </View>

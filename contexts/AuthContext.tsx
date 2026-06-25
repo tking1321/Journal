@@ -24,6 +24,7 @@ interface Profile {
   last_ai_request_date: string | null;
   last_ai_response_json: Record<string, unknown> | null;
   last_goal_refresh_date: string | null;
+  last_coaching_generation_date: string | null;
 }
 
 interface AuthContextType {

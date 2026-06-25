@@ -1,12 +1,37 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 
 export default function PlansScreen() {
   const router = useRouter();
+  const { updateProfile } = useAuth();
   const [selected, setSelected] = useState<'annual' | 'monthly'>('annual');
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubscribe() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (selected === 'annual') {
+        await updateProfile({
+          subscription_status: 'trial',
+          subscription_plan: 'annual',
+          trial_start_date: new Date().toISOString(),
+        });
+      } else {
+        await updateProfile({
+          subscription_status: 'active',
+          subscription_plan: 'monthly',
+        });
+      }
+      router.replace('/(tabs)');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -16,15 +41,22 @@ export default function PlansScreen() {
         </Pressable>
 
         <Text style={styles.title}>Choose Your Plan</Text>
-        <Text style={styles.subtitle}>Both plans include a 7-day free trial.</Text>
+        <Text style={styles.subtitle}>Unlock everything Diverge has to offer.</Text>
 
         <View style={styles.plans}>
+          {/* Annual card */}
           <Pressable
             style={[styles.planCard, selected === 'annual' && styles.planCardSelected]}
             onPress={() => setSelected('annual')}
           >
-            <View style={styles.popularBadge}>
-              <Text style={styles.popularText}>MOST POPULAR</Text>
+            <View style={styles.planTopRow}>
+              <View style={styles.popularBadge}>
+                <Text style={styles.popularText}>MOST POPULAR</Text>
+              </View>
+              <View style={styles.trialBadge}>
+                <Feather name="gift" size={10} color="#fff" />
+                <Text style={styles.trialBadgeText}>7-DAY FREE TRIAL</Text>
+              </View>
             </View>
             <View style={styles.planRow}>
               <View style={[styles.radio, selected === 'annual' && styles.radioFilled]}>
@@ -32,15 +64,20 @@ export default function PlansScreen() {
               </View>
               <View style={styles.planInfo}>
                 <Text style={styles.planName}>Annual</Text>
-                <Text style={styles.planBilling}>Billed $72/year</Text>
+                <Text style={styles.planBilling}>Billed $59.99/year (~$5/month)</Text>
               </View>
               <View style={styles.planPricing}>
-                <Text style={styles.planPrice}>$6</Text>
+                <Text style={styles.planPrice}>$5</Text>
                 <Text style={styles.planUnit}>/month</Text>
               </View>
             </View>
+            <View style={styles.trialNote}>
+              <Feather name="info" size={11} color={Colors.primary} />
+              <Text style={styles.trialNoteText}>Free trial available on annual plan only</Text>
+            </View>
           </Pressable>
 
+          {/* Monthly card */}
           <Pressable
             style={[styles.planCard, selected === 'monthly' && styles.planCardSelected]}
             onPress={() => setSelected('monthly')}
@@ -54,7 +91,7 @@ export default function PlansScreen() {
                 <Text style={styles.planBilling}>Billed each month</Text>
               </View>
               <View style={styles.planPricing}>
-                <Text style={styles.planPrice}>$12</Text>
+                <Text style={styles.planPrice}>$9.99</Text>
                 <Text style={styles.planUnit}>/month</Text>
               </View>
             </View>
@@ -64,10 +101,10 @@ export default function PlansScreen() {
         <View style={styles.features}>
           <Text style={styles.featuresTitle}>Everything included:</Text>
           {[
-            'Unlimited AI-generated daily goals',
+            'Unlimited Diverge-generated daily goals',
             'Personalized coaching voice and journal prompts',
             'Streak tracking and progress analytics',
-            'Weekly AI insights on your patterns',
+            'Weekly Diverge insights on your patterns',
             'Private, encrypted journal',
           ].map((f, i) => (
             <View key={i} style={styles.featureRow}>
@@ -79,11 +116,17 @@ export default function PlansScreen() {
       </ScrollView>
 
       <View style={styles.footer}>
-        <Pressable style={styles.ctaButton} onPress={() => router.push('/paywall/trial')}>
-          <Text style={styles.ctaText}>Start 7-Day Free Trial</Text>
+        <Pressable style={[styles.ctaButton, loading && styles.ctaButtonDisabled]} onPress={handleSubscribe} disabled={loading}>
+          <Text style={styles.ctaText}>
+            {selected === 'annual' ? 'Start 7-Day Free Trial' : 'Subscribe Monthly'}
+          </Text>
           <Feather name="arrow-right" size={16} color={Colors.textInverse} />
         </Pressable>
-        <Text style={styles.footnote}>No charge today. Cancel before day 8 and pay nothing.</Text>
+        {selected === 'annual' ? (
+          <Text style={styles.footnote}>Annual plan only. No charge today. Cancel before day 8 and pay nothing.</Text>
+        ) : (
+          <Text style={styles.footnote}>Charged $9.99/month. Cancel anytime.</Text>
+        )}
       </View>
     </View>
   );
@@ -106,11 +149,24 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.lg, padding: Spacing.md, overflow: 'hidden',
   },
   planCardSelected: { borderColor: Colors.primary, backgroundColor: Colors.surfaceElevated },
+  planTopRow: { flexDirection: 'row', gap: Spacing.xs, marginBottom: Spacing.sm, flexWrap: 'wrap' },
   popularBadge: {
     backgroundColor: Colors.primary, paddingHorizontal: Spacing.sm,
-    paddingVertical: 4, borderRadius: BorderRadius.sm, alignSelf: 'flex-start', marginBottom: Spacing.sm,
+    paddingVertical: 4, borderRadius: BorderRadius.sm, alignSelf: 'flex-start',
   },
   popularText: { fontFamily: 'Inter-Bold', fontSize: 9, color: Colors.textInverse, letterSpacing: 0.6 },
+  trialBadge: {
+    backgroundColor: '#16a34a', paddingHorizontal: Spacing.sm,
+    paddingVertical: 4, borderRadius: BorderRadius.sm, alignSelf: 'flex-start',
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+  },
+  trialBadgeText: { fontFamily: 'Inter-Bold', fontSize: 9, color: '#fff', letterSpacing: 0.6 },
+  trialNote: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    marginTop: Spacing.sm, paddingTop: Spacing.sm,
+    borderTopWidth: 1, borderTopColor: Colors.borderLight,
+  },
+  trialNoteText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs, color: Colors.primary },
   planRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   radio: {
     width: 20, height: 20, borderRadius: 10, borderWidth: 2,
@@ -133,6 +189,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary, paddingVertical: 16, borderRadius: BorderRadius.md,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
   },
+  ctaButtonDisabled: { opacity: 0.5 },
   ctaText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse },
   footnote: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, textAlign: 'center' },
 });
