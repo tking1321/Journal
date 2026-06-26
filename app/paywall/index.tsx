@@ -1,7 +1,9 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
+import { usePurchases } from '@/contexts/PurchasesContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 const BENEFITS = [
   'Personalized daily goals from your focus areas',
@@ -11,8 +13,23 @@ const BENEFITS = [
   'Your growth plan, built around your answers',
 ];
 
+const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
+
 export default function PaywallIntroScreen() {
   const router = useRouter();
+  const { presentPaywall } = usePurchases();
+  const { updateProfile } = useAuth();
+
+  async function handleChoosePlan() {
+    if (isNative) {
+      const purchased = await presentPaywall();
+      if (purchased) {
+        router.replace('/(tabs)');
+      }
+    } else {
+      router.push('/paywall/plans');
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -39,7 +56,7 @@ export default function PaywallIntroScreen() {
       </ScrollView>
 
       <View style={styles.footer}>
-        <Pressable style={styles.ctaButton} onPress={() => router.push('/paywall/plans')}>
+        <Pressable style={styles.ctaButton} onPress={handleChoosePlan}>
           <Text style={styles.ctaText}>Choose Your Plan</Text>
           <Feather name="arrow-right" size={16} color={Colors.textInverse} />
         </Pressable>

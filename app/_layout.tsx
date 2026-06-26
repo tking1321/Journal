@@ -5,7 +5,9 @@ import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { OnboardingProvider } from '@/contexts/OnboardingContext';
 import { SubscriptionProvider } from '@/contexts/SubscriptionContext';
+import { PurchasesProvider, usePurchases } from '@/contexts/PurchasesContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useFonts } from 'expo-font';
 import {
   Inter_400Regular,
@@ -17,10 +19,26 @@ import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync();
 
+function RCUserBridge() {
+  const { user } = useAuth();
+  const { identifyUser, logOutUser } = usePurchases();
+
+  useEffect(() => {
+    if (user?.id) {
+      identifyUser(user.id);
+    } else {
+      logOutUser();
+    }
+  }, [user?.id]);
+
+  return null;
+}
+
 function AppShell() {
   const { isDark } = useTheme();
   return (
     <>
+      <RCUserBridge />
       <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="auth" />
@@ -57,11 +75,13 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <OnboardingProvider>
-          <SubscriptionProvider>
-            <AppShell />
-          </SubscriptionProvider>
-        </OnboardingProvider>
+        <PurchasesProvider>
+          <OnboardingProvider>
+            <SubscriptionProvider>
+              <AppShell />
+            </SubscriptionProvider>
+          </OnboardingProvider>
+        </PurchasesProvider>
       </AuthProvider>
     </ThemeProvider>
   );

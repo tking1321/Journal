@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, Switch } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, Switch, Platform } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { usePurchases } from '@/contexts/PurchasesContext';
 import { supabase } from '@/lib/supabase';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+
+const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 
 interface Category {
   id: string;
@@ -17,11 +20,13 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { user, profile, signOut } = useAuth();
   const { colors, isDark, toggleTheme } = useTheme();
+  const { isProActive, presentPaywall, presentCustomerCenter, restorePurchases } = usePurchases();
   const [categories, setCategories] = useState<Category[]>([]);
   const [newCategory, setNewCategory] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [signingOut, setSigningOut] = useState(false);
+  const [restoringPurchases, setRestoringPurchases] = useState(false);
 
   const loadCategories = useCallback(async () => {
     if (!user) return;
@@ -61,15 +66,19 @@ export default function ProfileScreen() {
     }
   }
 
-  const subscriptionLabel: Record<string, string> = {
-    free: 'Free',
-    trial: 'Trial',
-    active: 'Premium',
-    expired: 'Expired',
-  };
+  async function handleRestorePurchases() {
+    if (!isNative || restoringPurchases) return;
+    setRestoringPurchases(true);
+    try {
+      await restorePurchases();
+    } finally {
+      setRestoringPurchases(false);
+    }
+  }
 
-  const status = profile?.subscription_status || 'free';
-  const isPremium = status === 'active' || status === 'trial';
+  const rcActive = isNative && isProActive;
+  const dbStatus = profile?.subscription_status || 'free';
+  const isPremium = rcActive || dbStatus === 'active' || dbStatus === 'trial';
 
   return (
     <ScrollView
@@ -94,10 +103,64 @@ export default function ProfileScreen() {
               { color: colors.textSecondary },
               isPremium && { color: colors.textInverse },
             ]}>
-              {subscriptionLabel[status] || 'Free'}
-              {status === 'trial' ? ` · ${profile?.trial_start_date ? Math.max(0, 7 - Math.floor((Date.now() - new Date(profile.trial_start_date).getTime()) / 86400000)) : 7}d left` : ''}
+              {rcActive ? 'Diverge Pro' : (isPremium ? 'Premium' : 'Free')}
+              {dbStatus === 'trial' && !rcActive ? ` · ${profile?.trial_start_date ? Math.max(0, 7 - Math.floor((Date.now() - new Date(profile.trial_start_date).getTime()) / 86400000)) : 7}d left` : ''}
             </Text>
           </View>
+        </View>
+      </View>
+
+      {/* Subscription Management */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Subscription</Text>
+        <View style={[styles.settingsList, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+          {isPremium ? (
+            isNative ? (
+              <Pressable
+                style={styles.settingRow}
+                onPress={presentCustomerCenter}
+              >
+                <View style={styles.settingLeft}>
+                  <Feather name="credit-card" size={15} color={colors.textSecondary} />
+                  <Text style={[styles.settingLabel, { color: colors.text }]}>Manage Subscription</Text>
+                </View>
+                <Feather name="chevron-right" size={15} color={colors.textTertiary} />
+              </Pressable>
+            ) : (
+              <View style={styles.settingRow}>
+                <View style={styles.settingLeft}>
+                  <Feather name="credit-card" size={15} color={colors.textSecondary} />
+                  <Text style={[styles.settingLabel, { color: colors.text }]}>Subscription Active</Text>
+                </View>
+                <Text style={[styles.settingValue, { color: colors.textSecondary }]}>Premium</Text>
+              </View>
+            )
+          ) : (
+            <Pressable
+              style={styles.settingRow}
+              onPress={isNative ? () => presentPaywall() : () => router.push('/paywall')}
+            >
+              <View style={styles.settingLeft}>
+                <Feather name="star" size={15} color={colors.textSecondary} />
+                <Text style={[styles.settingLabel, { color: colors.text }]}>Upgrade to Pro</Text>
+              </View>
+              <Feather name="chevron-right" size={15} color={colors.textTertiary} />
+            </Pressable>
+          )}
+          {isNative && (
+            <Pressable
+              style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: colors.borderLight }]}
+              onPress={handleRestorePurchases}
+              disabled={restoringPurchases}
+            >
+              <View style={styles.settingLeft}>
+                <Feather name="refresh-cw" size={15} color={colors.textSecondary} />
+                <Text style={[styles.settingLabel, { color: colors.text }]}>
+                  {restoringPurchases ? 'Restoring...' : 'Restore Purchases'}
+                </Text>
+              </View>
+            </Pressable>
+          )}
         </View>
       </View>
 

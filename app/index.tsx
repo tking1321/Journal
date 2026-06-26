@@ -1,11 +1,14 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePurchases } from '@/contexts/PurchasesContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useEffect } from 'react';
 import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Circle } from 'react-native-svg';
+
+const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 
 // Exponential lift: dot at origin, flat start curving up steeply near end, arrowhead
 function DivergeLogo({ size = 22, color = 'white' }: { size?: number; color?: string }) {
@@ -21,19 +24,27 @@ function DivergeLogo({ size = 22, color = 'white' }: { size?: number; color?: st
 export default function WelcomeScreen() {
   const router = useRouter();
   const { session, profile, loading } = useAuth();
+  const { isProActive, entitlementStatus } = usePurchases();
   const { colors } = useTheme();
 
   useEffect(() => {
-    if (!loading && session && profile) {
+    if (loading) return;
+    if (isNative && entitlementStatus === 'loading') return;
+
+    if (session && profile) {
       if (!profile.onboarding_completed) {
         router.replace('/onboarding');
-      } else if (profile.subscription_status === 'free' || !profile.subscription_status) {
+        return;
+      }
+      const dbPremium = profile.subscription_status === 'active' || profile.subscription_status === 'trial';
+      const rcPremium = isNative && isProActive;
+      if (!dbPremium && !rcPremium) {
         router.replace('/paywall');
       } else {
         router.replace('/(tabs)');
       }
     }
-  }, [loading, session, profile]);
+  }, [loading, session, profile, isProActive, entitlementStatus]);
 
   if (loading) {
     return (

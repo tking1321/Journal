@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePurchases } from '@/contexts/PurchasesContext';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
+
+const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 
 export default function PlansScreen() {
   const router = useRouter();
   const { updateProfile } = useAuth();
+  const { presentPaywall } = usePurchases();
   const [selected, setSelected] = useState<'annual' | 'monthly'>('annual');
   const [loading, setLoading] = useState(false);
 
@@ -15,19 +19,27 @@ export default function PlansScreen() {
     if (loading) return;
     setLoading(true);
     try {
-      if (selected === 'annual') {
-        await updateProfile({
-          subscription_status: 'trial',
-          subscription_plan: 'annual',
-          trial_start_date: new Date().toISOString(),
-        });
+      if (isNative) {
+        const purchased = await presentPaywall();
+        if (purchased) {
+          router.replace('/(tabs)');
+        }
       } else {
-        await updateProfile({
-          subscription_status: 'active',
-          subscription_plan: 'monthly',
-        });
+        // Web fallback: update Supabase profile directly
+        if (selected === 'annual') {
+          await updateProfile({
+            subscription_status: 'trial',
+            subscription_plan: 'annual',
+            trial_start_date: new Date().toISOString(),
+          });
+        } else {
+          await updateProfile({
+            subscription_status: 'active',
+            subscription_plan: 'monthly',
+          });
+        }
+        router.replace('/(tabs)');
       }
-      router.replace('/(tabs)');
     } finally {
       setLoading(false);
     }
