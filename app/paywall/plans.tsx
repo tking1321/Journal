@@ -23,23 +23,23 @@ export default function PlansScreen() {
         const purchased = await presentPaywall();
         if (purchased) {
           router.replace('/(tabs)');
+          return;
         }
-      } else {
-        // Web fallback: update Supabase profile directly
-        if (selected === 'annual') {
-          await updateProfile({
-            subscription_status: 'trial',
-            subscription_plan: 'annual',
-            trial_start_date: new Date().toISOString(),
-          });
-        } else {
-          await updateProfile({
-            subscription_status: 'active',
-            subscription_plan: 'monthly',
-          });
-        }
-        router.replace('/(tabs)');
+        // RC unavailable (Expo Go / no native module) — fall through to Supabase path
       }
+      if (selected === 'annual') {
+        await updateProfile({
+          subscription_status: 'trial',
+          subscription_plan: 'annual',
+          trial_start_date: new Date().toISOString(),
+        });
+      } else {
+        await updateProfile({
+          subscription_status: 'active',
+          subscription_plan: 'monthly',
+        });
+      }
+      router.replace('/(tabs)');
     } finally {
       setLoading(false);
     }
