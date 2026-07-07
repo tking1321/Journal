@@ -609,7 +609,7 @@ export default function TodayScreen() {
 
         {/* Completion Rings */}
         <View style={[styles.ringsCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
-          <CompletionRings journal={rings.journal_done} goals={rings.goals_done} goalProgress={goalProgress} />
+          <CompletionRings journal={rings.journal_done} goals={rings.goals_done} goalProgress={goalProgress} levelColor={levelIcon.color} />
           {rings.day_complete ? (
             <View style={styles.dayCompleteRow}>
               <Feather name="check-circle" size={14} color={colors.success} />

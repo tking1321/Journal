@@ -7,16 +7,17 @@ interface CompletionRingsProps {
   journal: boolean;
   goals: boolean;
   goalProgress: number; // 0–1
-  // reflection prop kept for backward compat but unused
+  levelColor?: string;
   reflection?: boolean;
 }
 
-const RING_COLOR = '#1A56A4';
+const DEFAULT_RING_COLOR = '#1A56A4';
 const SIZE = 100;
 const STROKE = 8;
 
-export default function CompletionRings({ journal, goals, goalProgress }: CompletionRingsProps) {
+export default function CompletionRings({ journal, goals, goalProgress, levelColor }: CompletionRingsProps) {
   const { colors } = useTheme();
+  const RING_COLOR = levelColor || DEFAULT_RING_COLOR;
   const r = (SIZE - STROKE) / 2;
   const circ = 2 * Math.PI * r;
 
