@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { isPermanentAccessEmail } from '@/lib/allowlist';
 import type { Session, User } from '@supabase/supabase-js';
 
 interface Profile {
@@ -13,6 +14,8 @@ interface Profile {
   reminder_time: string | null;
   subscription_status: string;
   trial_start_date: string | null;
+  trial_end_date: string | null;
+  has_used_free_trial: boolean;
   subscription_plan: string | null;
   onboarding_completed: boolean;
   user_level: number;
@@ -42,6 +45,36 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+async function applyAccessRules(
+  profile: Profile,
+  userEmail: string | undefined,
+  userId: string
+): Promise<Profile> {
+  const now = new Date();
+
+  // Permanent allowlist — grant lifetime access
+  if (isPermanentAccessEmail(userEmail) && profile.subscription_status !== 'lifetime') {
+    await supabase.from('profiles')
+      .update({ subscription_status: 'lifetime' })
+      .eq('id', userId);
+    return { ...profile, subscription_status: 'lifetime' };
+  }
+
+  // Trial expiry — mark expired if trial_end_date has passed
+  if (
+    profile.subscription_status === 'trial' &&
+    profile.trial_end_date &&
+    new Date(profile.trial_end_date) < now
+  ) {
+    await supabase.from('profiles')
+      .update({ subscription_status: 'expired' })
+      .eq('id', userId);
+    return { ...profile, subscription_status: 'expired' };
+  }
+
+  return profile;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -53,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchProfile(session.user.id);
+        fetchProfile(session.user.id, session.user.email);
       } else {
         setLoading(false);
       }
@@ -64,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null);
       if (session?.user) {
         (async () => {
-          await fetchProfile(session.user.id);
+          await fetchProfile(session.user.id, session.user.email);
         })();
       } else {
         setProfile(null);
@@ -75,29 +108,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  async function fetchProfile(userId: string) {
+  async function fetchProfile(userId: string, userEmail?: string) {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .maybeSingle();
 
+    let finalProfile: Profile | null = null;
+
     if (data) {
-      setProfile(data);
+      finalProfile = await applyAccessRules(data as Profile, userEmail, userId);
     } else if (!error) {
       const { data: newProfile } = await supabase
         .from('profiles')
         .insert({ id: userId })
         .select()
         .maybeSingle();
-      setProfile(newProfile);
+      if (newProfile) {
+        finalProfile = await applyAccessRules(newProfile as Profile, userEmail, userId);
+      }
     }
+
+    setProfile(finalProfile);
     setLoading(false);
   }
 
   async function refreshProfile() {
     if (user) {
-      await fetchProfile(user.id);
+      await fetchProfile(user.id, user.email);
     }
   }
 
@@ -109,7 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('id', user.id)
       .select()
       .maybeSingle();
-    if (data) setProfile(data);
+    if (data) setProfile(data as Profile);
   }
 
   async function signUp(email: string, password: string) {

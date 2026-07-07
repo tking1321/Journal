@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import { usePurchases } from '@/contexts/PurchasesContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 const BENEFITS = [
   'Personalized daily goals from your focus areas',
@@ -17,6 +18,8 @@ const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 export default function PaywallIntroScreen() {
   const router = useRouter();
   const { presentPaywall } = usePurchases();
+  const { profile } = useAuth();
+  const hasUsedTrial = profile?.has_used_free_trial ?? false;
 
   async function handleChoosePlan() {
     if (isNative) {
@@ -36,9 +39,11 @@ export default function PaywallIntroScreen() {
           <Feather name="trending-up" size={28} color={Colors.textInverse} />
         </View>
 
-        <Text style={styles.title}>Start free.{'\n'}See your growth in 7 days.</Text>
+        <Text style={styles.title}>{hasUsedTrial ? 'Unlock Diverge.\nChoose a plan.' : 'Start free.\nSee your growth in 7 days.'}</Text>
         <Text style={styles.subtitle}>
-          No charge today. Cancel before day 8 and you owe nothing.
+          {hasUsedTrial
+            ? 'Your free trial has been used. Choose a plan to continue your journey.'
+            : 'No charge today. Cancel before day 8 and you owe nothing.'}
         </Text>
 
         <View style={styles.benefitsList}>
@@ -58,7 +63,9 @@ export default function PaywallIntroScreen() {
           <Text style={styles.ctaText}>Choose Your Plan</Text>
           <Feather name="arrow-right" size={16} color={Colors.textInverse} />
         </Pressable>
-        <Text style={styles.footnote}>7-day free trial. Cancel anytime. No commitment.</Text>
+        {!hasUsedTrial && (
+          <Text style={styles.footnote}>7-day free trial. Cancel anytime. No commitment.</Text>
+        )}
       </View>
     </View>
   );

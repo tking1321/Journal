@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePurchases } from '@/contexts/PurchasesContext';
 import { supabase } from '@/lib/supabase';
-import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { Spacing, BorderRadius, FontSize, getLevelIcon } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
@@ -78,7 +78,9 @@ export default function ProfileScreen() {
 
   const rcActive = isNative && isProActive;
   const dbStatus = profile?.subscription_status || 'free';
-  const isPremium = rcActive || dbStatus === 'active' || dbStatus === 'trial';
+  const isPremium = rcActive || dbStatus === 'active' || dbStatus === 'trial' || dbStatus === 'lifetime';
+  const userLevel = profile?.user_level ?? 1;
+  const levelIcon = getLevelIcon(userLevel);
 
   return (
     <ScrollView
@@ -107,6 +109,10 @@ export default function ProfileScreen() {
               {dbStatus === 'trial' && !rcActive ? ` · ${profile?.trial_start_date ? Math.max(0, 7 - Math.floor((Date.now() - new Date(profile.trial_start_date).getTime()) / 86400000)) : 7}d left` : ''}
             </Text>
           </View>
+        </View>
+        <View style={[styles.levelBadge, { backgroundColor: levelIcon.color + '18', borderColor: levelIcon.color + '40' }]}>
+          <Feather name={levelIcon.icon as any} size={13} color={levelIcon.color} />
+          <Text style={[styles.levelBadgeText, { color: levelIcon.color }]}>Lv {userLevel}</Text>
         </View>
       </View>
 
@@ -232,18 +238,13 @@ export default function ProfileScreen() {
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Preferences</Text>
         <View style={[styles.settingsList, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
-          {[
-            { icon: 'heart', label: 'Coaching Style', value: profile?.coaching_style },
-            { icon: 'clock', label: 'Daily Time', value: profile?.daily_time_commitment },
-          ].map((s, i) => (
-            <View key={i} style={[styles.settingRow, i < 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
-              <View style={styles.settingLeft}>
-                <Feather name={s.icon as any} size={15} color={colors.textSecondary} />
-                <Text style={[styles.settingLabel, { color: colors.text }]}>{s.label}</Text>
-              </View>
-              <Text style={[styles.settingValue, { color: colors.textSecondary }]}>{s.value || 'Not set'}</Text>
+          <Pressable style={styles.settingRow} onPress={() => router.push('/preferences')}>
+            <View style={styles.settingLeft}>
+              <Feather name="sliders" size={15} color={colors.textSecondary} />
+              <Text style={[styles.settingLabel, { color: colors.text }]}>Edit Preferences</Text>
             </View>
-          ))}
+            <Feather name="chevron-right" size={15} color={colors.textTertiary} />
+          </Pressable>
           <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: colors.borderLight }]}>
             <View style={styles.settingLeft}>
               <Feather name="moon" size={15} color={colors.textSecondary} />
@@ -289,6 +290,11 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.full, alignSelf: 'flex-start', marginTop: 4,
   },
   statusText: { fontFamily: 'Inter-Medium', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  levelBadge: {
+    borderWidth: 1, borderRadius: BorderRadius.sm, paddingHorizontal: 7, paddingVertical: 4,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+  },
+  levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: 10 },
 
   section: { marginBottom: Spacing.xl },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.sm },

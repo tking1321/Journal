@@ -83,3 +83,32 @@ export const FontSize = {
   xxl: 28,
   hero: 36,
 };
+
+export interface LevelIcon {
+  icon: string;
+  color: string;
+  label: string;
+}
+
+export const LEVEL_ICONS: LevelIcon[] = [
+  { icon: 'circle', color: '#9A9A9A', label: 'Novice' },
+  { icon: 'triangle', color: '#888888', label: 'Learner' },
+  { icon: 'square', color: '#7A8A9A', label: 'Builder' },
+  { icon: 'leaf', color: '#27AE60', label: 'Grower' },
+  { icon: 'sun', color: '#2ECC71', label: 'Focused' },
+  { icon: 'star', color: '#16A34A', label: 'Achiever' },
+  { icon: 'zap', color: '#C9A84C', label: 'Driven' },
+  { icon: 'anchor', color: '#B8860B', label: 'Steady' },
+  { icon: 'shield', color: '#D4A017', label: 'Resilient' },
+  { icon: 'award', color: '#1A56A4', label: 'Elite' },
+  { icon: 'target', color: '#2563EB', label: 'Precise' },
+  { icon: 'compass', color: '#1D4ED8', label: 'Navigator' },
+  { icon: 'globe', color: '#C0392B', label: 'Visionary' },
+  { icon: 'trending-up', color: '#E74C3C', label: 'Ascendant' },
+  { icon: 'activity', color: '#991B1B', label: 'Peak' },
+];
+
+export function getLevelIcon(level: number): LevelIcon {
+  const idx = Math.min(Math.max(level - 1, 0), LEVEL_ICONS.length - 1);
+  return LEVEL_ICONS[idx];
+}

@@ -8,7 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
 import { generateDailyGoals, refreshDailyGoals, generateTodayCoaching } from '@/lib/ai';
-import { Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { Spacing, BorderRadius, FontSize, getLevelIcon } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import CompletionRings from '@/components/CompletionRings';
 
@@ -110,18 +110,20 @@ export default function TodayScreen() {
   const [goalModalVisible, setGoalModalVisible] = useState(false);
   const [goalComment, setGoalComment] = useState('');
   const [goalRegenerating, setGoalRegenerating] = useState(false);
+  const [savingGoal, setSavingGoal] = useState(false);
+  const [goalSaved, setGoalSaved] = useState(false);
 
   // Auto-gen guards
   const goalAutoRef = useRef(false);
   const coachAutoRef = useRef(false);
 
   const today = new Date().toISOString().split('T')[0];
-  const thisMonth = today.slice(0, 7);
 
   const userLevel = profile?.user_level || 1;
   const totalXp = profile?.total_xp_earned || 0;
   const currentXpInLevel = getXpInCurrentLevel(totalXp, userLevel);
   const xpNeeded = getXpForNextLevel(userLevel);
+  const levelIcon = getLevelIcon(userLevel);
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -163,7 +165,6 @@ export default function TodayScreen() {
     const lastType = (profile as Record<string, unknown>)?.last_ai_request_type as string | null;
     const lastDate = (profile as Record<string, unknown>)?.last_ai_request_date as string | null;
 
-    // Restore coaching note if it was generated today
     if (profile?.last_coaching_generation_date === today && profile?.last_coaching_note) {
       setCoachNote(profile.last_coaching_note);
     } else if (lastDate === today && cachedResponse) {
@@ -180,25 +181,29 @@ export default function TodayScreen() {
     setLoading(false);
   }, [user, profile, today]);
 
-  // Refresh journal ring whenever Today tab comes into focus
+  // On focus: refresh goals/streak/rings from DB without triggering AI
   useFocusEffect(
     useCallback(() => {
       if (!user) return;
-      async function checkJournalRing() {
-        const [journalRes, ringsRes] = await Promise.all([
-          supabase.from('journal_entries').select('entry_date').eq('entry_date', today).limit(1),
+      async function refreshFromDb() {
+        const [goalsRes, streakRes, ringsRes, journalRes] = await Promise.all([
+          supabase.from('goals').select('*').eq('goal_date', today).order('created_at'),
+          supabase.from('streaks').select('*').maybeSingle(),
           supabase.from('daily_rings').select('*').eq('ring_date', today).maybeSingle(),
+          supabase.from('journal_entries').select('entry_date').eq('entry_date', today).limit(1),
         ]);
-        const hasJournal = (journalRes.data || []).length > 0;
-        const freshRings = ringsRes.data;
-        if (freshRings) {
+        setGoals(goalsRes.data || []);
+        if (streakRes.data) setStreak(streakRes.data);
+        if (ringsRes.data) {
+          const freshRings = ringsRes.data;
           setRings(freshRings);
+          const hasJournal = (journalRes.data || []).length > 0;
           if (hasJournal && !freshRings.journal_done) {
             await updateRing({ journal_done: true }, freshRings);
           }
         }
       }
-      checkJournalRing();
+      refreshFromDb();
     }, [user, today])
   );
 
@@ -281,15 +286,6 @@ export default function TodayScreen() {
     }).eq('user_id', user.id);
 
     setStreak((prev) => prev ? { ...prev, current_streak: newCurrent, longest_streak: newLongest, last_active_date: today } : prev);
-
-    const { data: island } = await supabase.from('island_progress')
-      .select('buildings_count').eq('month_year', thisMonth).maybeSingle();
-
-    if (island) {
-      await supabase.from('island_progress').update({ buildings_count: island.buildings_count + 1 }).eq('month_year', thisMonth);
-    } else {
-      await supabase.from('island_progress').insert({ month_year: thisMonth, buildings_count: 1 });
-    }
 
     await checkAchievements(newCurrent, newLongest);
   }
@@ -426,10 +422,10 @@ export default function TodayScreen() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Goal modal functions ──────────────────────────────────────
   function openGoalModal(goal: Goal) {
     setSelectedGoal(goal);
     setGoalComment(goal.user_note || '');
+    setGoalSaved(false);
     setGoalModalVisible(true);
   }
 
@@ -440,13 +436,13 @@ export default function TodayScreen() {
     setGoalModalVisible(false);
     setSelectedGoal(null);
     setGoalComment('');
+    setGoalSaved(false);
   }
 
   async function handleCompleteFromModal(completed: boolean) {
     if (!selectedGoal || !user) return;
     const goal = selectedGoal;
 
-    // Save note if changed before completing
     if (goalComment.trim() !== (goal.user_note || '')) {
       await saveGoalNote();
     }
@@ -487,11 +483,24 @@ export default function TodayScreen() {
     setGoals((prev) => prev.map((g) => g.id === selectedGoal.id ? updated : g));
   }
 
+  async function handleSaveGoal() {
+    if (!selectedGoal || savingGoal || goalSaved) return;
+    setSavingGoal(true);
+    await supabase.from('saved_goals').insert({
+      original_goal_id: selectedGoal.id,
+      title: selectedGoal.title,
+      difficulty: selectedGoal.difficulty,
+      xp_value: selectedGoal.xp_value,
+      goal_date: selectedGoal.goal_date,
+    });
+    setGoalSaved(true);
+    setSavingGoal(false);
+  }
+
   async function regenerateSingleGoal() {
     if (!selectedGoal || goalRegenerating || !user) return;
     setGoalRegenerating(true);
 
-    // Save note first if changed
     if (goalComment.trim() !== (selectedGoal.user_note || '')) {
       await saveGoalNote();
     }
@@ -556,7 +565,6 @@ export default function TodayScreen() {
   const goalProgress = goals.length > 0 ? completedCount / goals.length : 0;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const dayOfMonth = new Date().getDate();
   const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
   const diffBg = isDark ? DIFFICULTY_BG_DARK : DIFFICULTY_BG_LIGHT;
   const alreadyRefreshedToday = profile?.last_goal_refresh_date === today;
@@ -576,15 +584,25 @@ export default function TodayScreen() {
         {/* Level & XP */}
         <View style={[styles.levelCard, { backgroundColor: colors.surface, borderColor: colors.accent + '40' }]}>
           <View style={styles.levelHeader}>
-            <View style={[styles.levelBadge, { backgroundColor: colors.primary }]}>
-              <Text style={[styles.levelBadgeText, { color: colors.textInverse }]}>LVL {userLevel}</Text>
+            <View style={styles.levelLeft}>
+              <View style={[styles.levelIconWrap, { backgroundColor: levelIcon.color + '18', borderColor: levelIcon.color + '40' }]}>
+                <Feather name={levelIcon.icon as any} size={16} color={levelIcon.color} />
+              </View>
+              <View>
+                <View style={styles.levelBadgeRow}>
+                  <Text style={[styles.levelBadgeText, { color: colors.text }]}>Level {userLevel}</Text>
+                  <View style={[styles.levelLabel, { backgroundColor: levelIcon.color + '18' }]}>
+                    <Text style={[styles.levelLabelText, { color: levelIcon.color }]}>{levelIcon.label}</Text>
+                  </View>
+                </View>
+                <Text style={[styles.xpLabel, { color: colors.textSecondary }]}>
+                  {currentXpInLevel} / {xpNeeded} XP to next level
+                </Text>
+              </View>
             </View>
-            <Text style={[styles.xpLabel, { color: colors.textSecondary }]}>
-              {currentXpInLevel} / {xpNeeded} XP to next level
-            </Text>
           </View>
           <View style={[styles.xpBarTrack, { backgroundColor: colors.borderLight }]}>
-            <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any, backgroundColor: colors.accent }]} />
+            <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any, backgroundColor: levelIcon.color }]} />
           </View>
           <Text style={[styles.totalXpText, { color: colors.textTertiary }]}>Total XP: {totalXp}</Text>
         </View>
@@ -715,11 +733,6 @@ export default function TodayScreen() {
             ))}
           </View>
         )}
-
-        <View style={styles.islandHint}>
-          <Feather name="map" size={13} color={colors.textTertiary} />
-          <Text style={[styles.islandHintText, { color: colors.textTertiary }]}>Day {dayOfMonth}/30 of this month's chapter</Text>
-        </View>
       </ScrollView>
 
       {/* XP toast */}
@@ -788,7 +801,7 @@ export default function TodayScreen() {
               </View>
             )}
 
-            {/* Comment field */}
+            {/* Reflection field */}
             <Text style={[styles.commentLabel, { color: colors.textTertiary }]}>YOUR REFLECTION</Text>
             <TextInput
               style={[styles.commentInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
@@ -820,6 +833,21 @@ export default function TodayScreen() {
 
               <Pressable
                 style={[
+                  styles.saveBtn,
+                  { backgroundColor: goalSaved ? colors.surfaceElevated : colors.accent + '18', borderColor: goalSaved ? colors.borderLight : colors.accent + '60' },
+                  savingGoal && styles.buttonDisabled,
+                ]}
+                onPress={handleSaveGoal}
+                disabled={savingGoal || goalSaved}
+              >
+                <Feather name="bookmark" size={14} color={goalSaved ? colors.textTertiary : colors.accent} />
+                <Text style={[styles.saveBtnText, { color: goalSaved ? colors.textTertiary : colors.accent }]}>
+                  {goalSaved ? 'Saved' : 'Save'}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
                   styles.completeBtn,
                   selectedGoal?.completed
                     ? { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }
@@ -836,7 +864,7 @@ export default function TodayScreen() {
                   styles.completeBtnText,
                   { color: selectedGoal?.completed ? colors.textSecondary : colors.textInverse },
                 ]}>
-                  {selectedGoal?.completed ? 'Mark Incomplete' : 'Complete Goal'}
+                  {selectedGoal?.completed ? 'Undo' : 'Complete'}
                 </Text>
               </Pressable>
             </View>
@@ -857,9 +885,16 @@ const styles = StyleSheet.create({
   date: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, marginTop: 4, marginBottom: Spacing.lg },
 
   levelCard: { borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md },
-  levelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm },
-  levelBadge: { paddingHorizontal: Spacing.sm + 4, paddingVertical: 4, borderRadius: BorderRadius.sm },
-  levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: 12, letterSpacing: 0.5 },
+  levelHeader: { marginBottom: Spacing.sm },
+  levelLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  levelIconWrap: {
+    width: 38, height: 38, borderRadius: BorderRadius.md, borderWidth: 1,
+    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+  },
+  levelBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: 2 },
+  levelBadgeText: { fontFamily: 'Inter-Bold', fontSize: FontSize.md },
+  levelLabel: { paddingHorizontal: Spacing.xs + 2, paddingVertical: 2, borderRadius: BorderRadius.sm },
+  levelLabelText: { fontFamily: 'Inter-SemiBold', fontSize: 10, letterSpacing: 0.3 },
   xpLabel: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
   xpBarTrack: { height: 6, borderRadius: BorderRadius.full, overflow: 'hidden' },
   xpBarFill: { height: '100%', borderRadius: BorderRadius.full },
@@ -908,7 +943,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm, paddingVertical: 3,
   },
   refreshButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
-
   buttonDisabled: { opacity: 0.45 },
 
   goalsList: { gap: Spacing.sm },
@@ -938,12 +972,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
   emptySubtitle: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center' },
 
-  islandHint: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
-    justifyContent: 'center', marginTop: Spacing.xl, paddingBottom: Spacing.md,
-  },
-  islandHintText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
-
   xpToast: {
     position: 'absolute', top: 80, right: Spacing.lg,
     borderWidth: 1, borderRadius: BorderRadius.full, paddingHorizontal: Spacing.md, paddingVertical: 6,
@@ -967,7 +995,6 @@ const styles = StyleSheet.create({
   },
   achievementText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, flex: 1 },
 
-  // Goal modal
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   goalModalSheet: {
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
@@ -990,7 +1017,12 @@ const styles = StyleSheet.create({
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
     borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: 12,
   },
-  regenBtnText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm },
+  regenBtnText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
+  saveBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
+    borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: 12,
+  },
+  saveBtnText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
   completeBtn: {
     flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
     borderWidth: 1, borderRadius: BorderRadius.md, paddingVertical: 12,

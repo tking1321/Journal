@@ -7,10 +7,6 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
-import { supabase } from '@/lib/supabase';
-
-const DEMO_EMAIL = 'demo@growapp.test';
-const DEMO_PASSWORD = 'GrowDemo2026!';
 
 export default function AuthScreen() {
   const router = useRouter();
@@ -40,64 +36,6 @@ export default function AuthScreen() {
       router.replace('/onboarding');
     } else {
       router.replace('/');
-    }
-  }
-
-  async function handleDemo() {
-    setLoading(true);
-    setError(null);
-
-    // Try sign in first; if fails, sign up
-    let result = await signIn(DEMO_EMAIL, DEMO_PASSWORD);
-    if (result.error) {
-      const signUpResult = await signUp(DEMO_EMAIL, DEMO_PASSWORD);
-      if (signUpResult.error) {
-        setError(signUpResult.error);
-        setLoading(false);
-        return;
-      }
-      // Wait a moment for auth to settle then set up demo profile
-      await new Promise((r) => setTimeout(r, 800));
-      await setupDemoProfile();
-    }
-
-    setLoading(false);
-    router.replace('/(tabs)');
-  }
-
-  async function setupDemoProfile() {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-
-    const userId = session.user.id;
-
-    await supabase.from('profiles').upsert({
-      id: userId,
-      display_name: 'Demo User',
-      coaching_style: 'strict coach',
-      journaling_style: 'freeform',
-      daily_time_commitment: '10 minutes',
-      biggest_obstacle: 'Building consistent habits',
-      success_vision: 'A disciplined, focused version of myself',
-      reminder_time: '8:00 AM',
-      subscription_status: 'active',
-      subscription_plan: 'annual',
-      onboarding_completed: true,
-    });
-
-    // Seed demo categories
-    const existing = await supabase.from('categories').select('id').eq('user_id', userId);
-    if (!existing.data?.length) {
-      await supabase.from('categories').insert([
-        { name: 'deep work', growth_description: 'Do 3 hours of uninterrupted focused work daily', user_id: userId },
-        { name: 'physical performance', growth_description: 'Build strength and endurance as a competitive edge', user_id: userId },
-        { name: 'clear communication', growth_description: 'Speak with precision and confidence in any room', user_id: userId },
-      ]);
-    }
-
-    const existingStreak = await supabase.from('streaks').select('id').eq('user_id', userId).maybeSingle();
-    if (!existingStreak.data) {
-      await supabase.from('streaks').insert({ user_id: userId, current_streak: 3, longest_streak: 7 });
     }
   }
 
@@ -157,21 +95,6 @@ export default function AuthScreen() {
             </Text>
           </Pressable>
 
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <Pressable
-            style={[styles.demoButton, loading && styles.disabled]}
-            onPress={handleDemo}
-            disabled={loading}
-          >
-            <Feather name="zap" size={16} color={Colors.text} />
-            <Text style={styles.demoButtonText}>Continue as Tester (Premium)</Text>
-          </Pressable>
-
           <Pressable style={styles.switchMode} onPress={() => { setIsSignUp(!isSignUp); setError(null); }}>
             <Text style={styles.switchModeText}>
               {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
@@ -212,15 +135,6 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.5 },
   submitButtonText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse },
-  divider: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
-  dividerText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textTertiary },
-  demoButton: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
-    paddingVertical: 14, borderRadius: BorderRadius.md,
-    borderWidth: 1.5, borderColor: Colors.border,
-  },
-  demoButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.md, color: Colors.text },
   switchMode: { paddingVertical: Spacing.sm, alignItems: 'center' },
   switchModeText: { fontFamily: 'Inter-Medium', fontSize: FontSize.sm, color: Colors.textSecondary },
 });

@@ -17,7 +17,8 @@ export default function TabLayout() {
     }
     const isPayingUser =
       profile.subscription_status === 'trial' ||
-      profile.subscription_status === 'active';
+      profile.subscription_status === 'active' ||
+      profile.subscription_status === 'lifetime';
 
     if (!isPayingUser) {
       router.replace('/paywall');
@@ -61,8 +62,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="goals"
         options={{
-          title: 'Goals',
-          tabBarIcon: ({ size, color }) => <Feather name="target" size={size} color={color} />,
+          title: 'Saved',
+          tabBarIcon: ({ size, color }) => <Feather name="bookmark" size={size} color={color} />,
         }}
       />
       <Tabs.Screen

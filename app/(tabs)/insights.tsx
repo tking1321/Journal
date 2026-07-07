@@ -19,24 +19,18 @@ interface AchievementRow {
   unlocked_at: string;
 }
 
-interface IslandData {
-  buildings_count: number;
-}
-
 export default function InsightsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
   const [stats, setStats] = useState({ entries: 0, goalsCompleted: 0, goalsTotal: 0, streak: 0, longestStreak: 0, completion: 0 });
   const [prevStats, setPrevStats] = useState({ entries: 0 });
   const [calendarDays, setCalendarDays] = useState<DayStatus[]>([]);
-  const [island, setIsland] = useState<IslandData | null>(null);
   const [achievements, setAchievements] = useState<AchievementRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
-  const thisMonth = today.slice(0, 7);
   const dayOfMonth = new Date().getDate();
 
   // Build calendar: current month days
@@ -50,12 +44,11 @@ export default function InsightsScreen() {
 
     const monthStart = today.slice(0, 7) + '-01';
 
-    const [entriesRes, goalsRes, oldEntriesRes, streakRes, islandRes, achievementsRes, ringsRes] = await Promise.all([
+    const [entriesRes, goalsRes, oldEntriesRes, streakRes, achievementsRes, ringsRes] = await Promise.all([
       supabase.from('journal_entries').select('content, entry_date').gte('entry_date', weekAgo),
       supabase.from('goals').select('completed, goal_date').gte('goal_date', weekAgo),
       supabase.from('journal_entries').select('entry_date').gte('entry_date', monthAgo).lt('entry_date', weekAgo),
       supabase.from('streaks').select('*').maybeSingle(),
-      supabase.from('island_progress').select('buildings_count').eq('month_year', thisMonth).maybeSingle(),
       supabase.from('achievements').select('key, label, unlocked_at').order('unlocked_at', { ascending: false }),
       supabase.from('daily_rings').select('ring_date, journal_done, goals_done, day_complete').gte('ring_date', monthStart),
     ]);
@@ -77,7 +70,6 @@ export default function InsightsScreen() {
     });
 
     setPrevStats({ entries: oldEntries.length });
-    setIsland(islandRes.data);
     setAchievements(achievementsRes.data || []);
 
     // Build calendar days for the current month
@@ -104,7 +96,7 @@ export default function InsightsScreen() {
       });
     }
     setCalendarDays(days);
-  }, [user, weekAgo, monthAgo, thisMonth, daysInMonth, calendarMonth, calendarYear, today]);
+  }, [user, weekAgo, monthAgo, daysInMonth, calendarMonth, calendarYear, today]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -257,55 +249,6 @@ export default function InsightsScreen() {
         </View>
       </View>
 
-      {/* Monthly chapter / island */}
-      <View style={[styles.sectionLabel, { marginTop: Spacing.lg }]}>
-        <Text style={[styles.sectionLabelText, { color: colors.textTertiary }]}>THIS MONTH'S CHAPTER</Text>
-      </View>
-      <View style={[styles.islandCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
-        <View style={styles.islandHeader}>
-          <Feather name="map" size={16} color={colors.text} />
-          <Text style={[styles.islandTitle, { color: colors.text }]}>Growth Island</Text>
-          <Text style={[styles.islandProgress, { color: colors.textTertiary }]}>Day {dayOfMonth}/30</Text>
-        </View>
-        <View style={styles.islandGrid}>
-          {Array.from({ length: 30 }).map((_, i) => {
-            const dayNum = i + 1;
-            const mm = String(calendarMonth + 1).padStart(2, '0');
-            const dd = String(dayNum).padStart(2, '0');
-            const dateStr = `${calendarYear}-${mm}-${dd}`;
-            const dayData = calendarDays.find((d) => d.date === dateStr);
-            const isCompleted = dayData?.complete ?? false;
-            const isToday = dateStr === today;
-            const isFuture = dateStr > today;
-            return (
-              <View
-                key={i}
-                style={[
-                  styles.islandBlock,
-                  { backgroundColor: colors.borderLight },
-                  isCompleted && { backgroundColor: colors.success ?? '#22c55e' },
-                  isToday && !isCompleted && !isFuture && { backgroundColor: colors.primary + '40', borderWidth: 1, borderColor: colors.primary },
-                ]}
-              />
-            );
-          })}
-        </View>
-        <View style={styles.islandLegend}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: colors.success ?? '#22c55e' }]} />
-            <Text style={[styles.legendText, { color: colors.textSecondary }]}>Complete day</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: colors.primary + '40', borderWidth: 1, borderColor: colors.primary }]} />
-            <Text style={[styles.legendText, { color: colors.textSecondary }]}>Today</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: colors.borderLight }]} />
-            <Text style={[styles.legendText, { color: colors.textSecondary }]}>Incomplete</Text>
-          </View>
-        </View>
-      </View>
-
       {/* Achievements */}
       {achievements.length > 0 && (
         <>
@@ -391,15 +334,6 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
-
-  islandCard: { borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md },
-  islandHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.md },
-  islandTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.sm, flex: 1 },
-  islandProgress: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
-  islandGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: Spacing.sm },
-  islandBlock: { width: 14, height: 14, borderRadius: 3 },
-  islandCaption: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
-  islandLegend: { flexDirection: 'row', gap: Spacing.md, flexWrap: 'wrap', marginTop: Spacing.xs },
 
   achievementsList: { gap: Spacing.sm, marginBottom: Spacing.lg },
   achievementRow: {

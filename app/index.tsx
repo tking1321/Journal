@@ -36,7 +36,10 @@ export default function WelcomeScreen() {
         router.replace('/onboarding');
         return;
       }
-      const dbPremium = profile.subscription_status === 'active' || profile.subscription_status === 'trial';
+      const dbPremium =
+        profile.subscription_status === 'active' ||
+        profile.subscription_status === 'trial' ||
+        profile.subscription_status === 'lifetime';
       const rcPremium = isNative && isProActive;
       if (!dbPremium && !rcPremium) {
         router.replace('/paywall');

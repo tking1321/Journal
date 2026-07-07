@@ -10,10 +10,11 @@ const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 
 export default function PlansScreen() {
   const router = useRouter();
-  const { updateProfile } = useAuth();
+  const { profile, updateProfile } = useAuth();
   const { presentPaywall } = usePurchases();
   const [selected, setSelected] = useState<'annual' | 'monthly'>('annual');
   const [loading, setLoading] = useState(false);
+  const hasUsedTrial = profile?.has_used_free_trial ?? false;
 
   async function handleSubscribe() {
     if (loading) return;
@@ -28,11 +29,19 @@ export default function PlansScreen() {
         // RC unavailable (Expo Go / no native module) — fall through to Supabase path
       }
       if (selected === 'annual') {
-        await updateProfile({
-          subscription_status: 'trial',
-          subscription_plan: 'annual',
-          trial_start_date: new Date().toISOString(),
-        });
+        if (!hasUsedTrial) {
+          await updateProfile({
+            subscription_status: 'trial',
+            subscription_plan: 'annual',
+            trial_start_date: new Date().toISOString(),
+            has_used_free_trial: true,
+          });
+        } else {
+          await updateProfile({
+            subscription_status: 'active',
+            subscription_plan: 'annual',
+          });
+        }
       } else {
         await updateProfile({
           subscription_status: 'active',
@@ -65,10 +74,12 @@ export default function PlansScreen() {
               <View style={styles.popularBadge}>
                 <Text style={styles.popularText}>MOST POPULAR</Text>
               </View>
-              <View style={styles.trialBadge}>
-                <Feather name="gift" size={10} color="#fff" />
-                <Text style={styles.trialBadgeText}>7-DAY FREE TRIAL</Text>
-              </View>
+              {!hasUsedTrial && (
+                <View style={styles.trialBadge}>
+                  <Feather name="gift" size={10} color="#fff" />
+                  <Text style={styles.trialBadgeText}>7-DAY FREE TRIAL</Text>
+                </View>
+              )}
             </View>
             <View style={styles.planRow}>
               <View style={[styles.radio, selected === 'annual' && styles.radioFilled]}>
@@ -83,10 +94,12 @@ export default function PlansScreen() {
                 <Text style={styles.planUnit}>/month</Text>
               </View>
             </View>
-            <View style={styles.trialNote}>
-              <Feather name="info" size={11} color={Colors.primary} />
-              <Text style={styles.trialNoteText}>Free trial available on annual plan only</Text>
-            </View>
+            {!hasUsedTrial && (
+              <View style={styles.trialNote}>
+                <Feather name="info" size={11} color={Colors.primary} />
+                <Text style={styles.trialNoteText}>Free trial available on annual plan only</Text>
+              </View>
+            )}
           </Pressable>
 
           {/* Monthly card */}
@@ -130,12 +143,16 @@ export default function PlansScreen() {
       <View style={styles.footer}>
         <Pressable style={[styles.ctaButton, loading && styles.ctaButtonDisabled]} onPress={handleSubscribe} disabled={loading}>
           <Text style={styles.ctaText}>
-            {selected === 'annual' ? 'Start 7-Day Free Trial' : 'Subscribe Monthly'}
+            {selected === 'annual'
+              ? (hasUsedTrial ? 'Subscribe Annually' : 'Start 7-Day Free Trial')
+              : 'Subscribe Monthly'}
           </Text>
           <Feather name="arrow-right" size={16} color={Colors.textInverse} />
         </Pressable>
         {selected === 'annual' ? (
-          <Text style={styles.footnote}>Annual plan only. No charge today. Cancel before day 8 and pay nothing.</Text>
+          hasUsedTrial
+            ? <Text style={styles.footnote}>Charged $59.99/year. Cancel anytime.</Text>
+            : <Text style={styles.footnote}>Annual plan only. No charge today. Cancel before day 8 and pay nothing.</Text>
         ) : (
           <Text style={styles.footnote}>Charged $9.99/month. Cancel anytime.</Text>
         )}
