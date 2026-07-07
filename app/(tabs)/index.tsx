@@ -11,6 +11,7 @@ import { generateDailyGoals, refreshDailyGoals, generateTodayCoaching } from '@/
 import { Spacing, BorderRadius, FontSize, getLevelIcon } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import CompletionRings from '@/components/CompletionRings';
+import LevelsModal from '@/components/LevelsModal';
 
 interface Goal {
   id: string;
@@ -111,6 +112,7 @@ export default function TodayScreen() {
   const [goalComment, setGoalComment] = useState('');
   const [goalRegenerating, setGoalRegenerating] = useState(false);
   const [savingGoal, setSavingGoal] = useState(false);
+  const [levelsModalVisible, setLevelsModalVisible] = useState(false);
   const [goalSaved, setGoalSaved] = useState(false);
 
   // Auto-gen guards
@@ -582,7 +584,10 @@ export default function TodayScreen() {
         </Text>
 
         {/* Level & XP */}
-        <View style={[styles.levelCard, { backgroundColor: colors.surface, borderColor: colors.accent + '40' }]}>
+        <Pressable
+          style={[styles.levelCard, { backgroundColor: colors.surface, borderColor: colors.accent + '40' }]}
+          onPress={() => setLevelsModalVisible(true)}
+        >
           <View style={styles.levelHeader}>
             <View style={styles.levelLeft}>
               <View style={[styles.levelIconWrap, { backgroundColor: levelIcon.color + '18', borderColor: levelIcon.color + '40' }]}>
@@ -600,12 +605,19 @@ export default function TodayScreen() {
                 </Text>
               </View>
             </View>
+            <Feather name="chevron-right" size={14} color={colors.textTertiary} />
           </View>
           <View style={[styles.xpBarTrack, { backgroundColor: colors.borderLight }]}>
             <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any, backgroundColor: levelIcon.color }]} />
           </View>
           <Text style={[styles.totalXpText, { color: colors.textTertiary }]}>Total XP: {totalXp}</Text>
-        </View>
+        </Pressable>
+
+        <LevelsModal
+          visible={levelsModalVisible}
+          currentLevel={userLevel}
+          onClose={() => setLevelsModalVisible(false)}
+        />
 
         {/* Completion Rings */}
         <View style={[styles.ringsCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
@@ -885,7 +897,7 @@ const styles = StyleSheet.create({
   date: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, marginTop: 4, marginBottom: Spacing.lg },
 
   levelCard: { borderWidth: 1, borderRadius: BorderRadius.lg, padding: Spacing.md, marginBottom: Spacing.md },
-  levelHeader: { marginBottom: Spacing.sm },
+  levelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm },
   levelLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   levelIconWrap: {
     width: 38, height: 38, borderRadius: BorderRadius.md, borderWidth: 1,

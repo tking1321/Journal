@@ -98,12 +98,12 @@ export const LEVEL_ICONS: LevelIcon[] = [
   { icon: 'circle',      color: '#28BE60', label: 'Builder' },
   { icon: 'circle',      color: '#22B858', label: 'Seeker' },
   { icon: 'circle',      color: '#1CAE50', label: 'Finder' },
-  // 6-10: Green — leaf
-  { icon: 'leaf',        color: '#22C55E', label: 'Grower' },
-  { icon: 'leaf',        color: '#1EB356', label: 'Maker' },
-  { icon: 'leaf',        color: '#1AA14E', label: 'Mover' },
-  { icon: 'leaf',        color: '#168F46', label: 'Starter' },
-  { icon: 'leaf',        color: '#127D3E', label: 'Rising' },
+  // 6-10: Green — feather
+  { icon: 'feather',     color: '#22C55E', label: 'Grower' },
+  { icon: 'feather',     color: '#1EB356', label: 'Maker' },
+  { icon: 'feather',     color: '#1AA14E', label: 'Mover' },
+  { icon: 'feather',     color: '#168F46', label: 'Starter' },
+  { icon: 'feather',     color: '#127D3E', label: 'Rising' },
   // 11-15: Forest green — star
   { icon: 'star',        color: '#16A34A', label: 'Achiever' },
   { icon: 'star',        color: '#139142', label: 'Performer' },
