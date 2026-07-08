@@ -53,6 +53,7 @@ interface Achievement {
 }
 
 const LEVEL_THRESHOLDS = [0, 20, 40, 65, 95, 130, 170];
+const MAX_LEVEL = 100;
 
 function getThresholdForLevel(level: number): number {
   if (level <= LEVEL_THRESHOLDS.length) return LEVEL_THRESHOLDS[level - 1];
@@ -422,8 +423,13 @@ export default function TodayScreen() {
 
   async function awardXp(xpAmount: number) {
     if (!user || !profile) return;
+    if ((profile.user_level || 1) >= MAX_LEVEL) {
+      setXpGain({ amount: xpAmount, visible: true });
+      setTimeout(() => setXpGain({ amount: 0, visible: false }), 2000);
+      return;
+    }
     const newTotal = (profile.total_xp_earned || 0) + xpAmount;
-    const newLevel = calculateLevel(newTotal);
+    const newLevel = Math.min(calculateLevel(newTotal), MAX_LEVEL);
     await supabase.from('profiles').update({
       current_xp: getXpInCurrentLevel(newTotal, newLevel),
       total_xp_earned: newTotal,
@@ -469,14 +475,16 @@ export default function TodayScreen() {
     if (completed) {
       await awardXp(goal.xp_value);
     } else {
-      const newTotal = Math.max(0, (profile?.total_xp_earned || 0) - goal.xp_value);
-      const newLevel = calculateLevel(newTotal);
-      await supabase.from('profiles').update({
-        current_xp: getXpInCurrentLevel(newTotal, newLevel),
-        total_xp_earned: newTotal,
-        user_level: newLevel,
-      }).eq('id', user.id);
-      await refreshProfile();
+      if ((profile?.user_level || 1) < MAX_LEVEL) {
+        const newTotal = Math.max(0, (profile?.total_xp_earned || 0) - goal.xp_value);
+        const newLevel = calculateLevel(newTotal);
+        await supabase.from('profiles').update({
+          current_xp: getXpInCurrentLevel(newTotal, newLevel),
+          total_xp_earned: newTotal,
+          user_level: newLevel,
+        }).eq('id', user.id);
+        await refreshProfile();
+      }
     }
 
     const updatedGoals = goals.map((g) => g.id === goal.id ? updated : g);
