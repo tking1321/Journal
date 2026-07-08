@@ -81,6 +81,11 @@ function calculateLevel(totalXp: number): number {
 const DIFFICULTY_COLORS: Record<string, string> = {
   easy: '#1D6A3A', medium: '#A0620A', hard: '#C0392B',
 };
+
+function getLocalToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 const DIFFICULTY_BG_LIGHT: Record<string, string> = {
   easy: '#EDF5F0', medium: '#FFF4E6', hard: '#FDE8E6',
 };
@@ -120,7 +125,7 @@ export default function TodayScreen() {
   const goalAutoRef = useRef(false);
   const coachAutoRef = useRef(false);
 
-  const today = new Date().toISOString().split('T')[0];
+  const [today, setToday] = useState(getLocalToday);
 
   const userLevel = profile?.user_level || 1;
   const totalXp = profile?.total_xp_earned || 0;
@@ -231,6 +236,25 @@ export default function TodayScreen() {
       }
     }
   }, [loading, coachNote, coachingLoading, profile?.last_coaching_generation_date]);
+
+  // Reset state at local midnight so goals and rings refresh for the new day
+  useEffect(() => {
+    const now = new Date();
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
+    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    const timer = setTimeout(() => {
+      const newToday = getLocalToday();
+      setToday(newToday);
+      goalAutoRef.current = false;
+      coachAutoRef.current = false;
+      setGoals([]);
+      setRings({ journal_done: false, goals_done: false, day_complete: false });
+      setCoachNote('');
+      setAiInsight('');
+      setNextFocus('');
+    }, msUntilMidnight);
+    return () => clearTimeout(timer);
+  }, [today]);
 
   async function upsertRing(updates: Partial<DailyRing>): Promise<DailyRing> {
     const current = rings;

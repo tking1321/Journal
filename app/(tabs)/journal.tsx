@@ -50,7 +50,10 @@ export default function JournalScreen() {
   const [editSaving, setEditSaving] = useState(false);
   const [entryInsightLoading, setEntryInsightLoading] = useState(false);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
 
   function formatEntryDate(entry: JournalEntry): string {
     const isToday = entry.entry_date === today;
@@ -83,6 +86,16 @@ export default function JournalScreen() {
 
     setEntries((prev) => [savedEntry, ...prev]);
     const savedContent = content.trim();
+
+    // Mark journal ring done immediately so Today tab reflects it without needing a tab switch
+    const { data: existingRing } = await supabase
+      .from('daily_rings').select('*').eq('ring_date', today).maybeSingle();
+    if (!existingRing?.journal_done) {
+      const merged = existingRing
+        ? { ...existingRing, journal_done: true, day_complete: !!existingRing.goals_done }
+        : { ring_date: today, journal_done: true, goals_done: false, day_complete: false };
+      await supabase.from('daily_rings').upsert(merged, { onConflict: 'user_id,ring_date' });
+    }
     const entriesForAi = entries.slice(0, 2).map(e => ({ content: e.content }));
     setContent('');
     setIsWriting(false);
