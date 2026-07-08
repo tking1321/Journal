@@ -52,11 +52,19 @@ export default function JournalScreen() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  function formatEntryDate(entry: JournalEntry): string {
+    const isToday = entry.entry_date === today;
+    const date = isToday
+      ? 'Today'
+      : new Date(entry.entry_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return date;
+  }
+
   const loadEntries = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase
       .from('journal_entries').select('*')
-      .order('created_at', { ascending: false }).limit(20);
+      .order('created_at', { ascending: false }).limit(30);
     setEntries(data || []);
   }, [user]);
 
@@ -194,7 +202,7 @@ export default function JournalScreen() {
     }
   }
 
-  const todayEntry = entries.find((e) => e.entry_date === today);
+  const todayEntries = entries.filter((e) => e.entry_date === today);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -208,12 +216,14 @@ export default function JournalScreen() {
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </Text>
 
-        {!isWriting && !todayEntry && (
+        {!isWriting && (
           <Pressable style={[styles.writePrompt, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={() => setIsWriting(true)}>
             <Text style={[styles.promptQuestion, { color: colors.text }]}>{prompt}</Text>
             <View style={styles.writeCta}>
               <Feather name="edit-3" size={14} color={colors.textTertiary} />
-              <Text style={[styles.writeCtaText, { color: colors.textTertiary }]}>Write today's entry</Text>
+              <Text style={[styles.writeCtaText, { color: colors.textTertiary }]}>
+                {todayEntries.length > 0 ? 'Write another entry' : "Write today's entry"}
+              </Text>
             </View>
           </Pressable>
         )}
@@ -244,32 +254,9 @@ export default function JournalScreen() {
           </View>
         )}
 
-        {todayEntry && !isWriting && (
-          <Pressable
-            style={[styles.todayCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
-            onPress={() => openEntry(todayEntry)}
-          >
-            <View style={styles.todayHeader}>
-              <Feather name="check-circle" size={14} color={colors.success} />
-              <Text style={[styles.todayLabel, { color: colors.success }]}>Today's Entry</Text>
-              <View style={styles.todayHeaderRight}>
-                <Feather name="chevron-right" size={14} color={colors.textTertiary} />
-              </View>
-            </View>
-            <Text style={[styles.todayContent, { color: colors.text }]} numberOfLines={4}>{todayEntry.content}</Text>
-            {todayEntry.ai_summary && (
-              <View style={[styles.aiSummaryBox, { backgroundColor: colors.surfaceElevated }]}>
-                <Text style={[styles.aiLabel, { color: colors.textTertiary }]}>DIVERGE INSIGHT</Text>
-                <Text style={[styles.aiSummaryText, { color: colors.textSecondary }]} numberOfLines={2}>{todayEntry.ai_summary}</Text>
-              </View>
-            )}
-          </Pressable>
-        )}
-
         {entries.length > 0 && (
           <View style={styles.historySection}>
-            <Text style={[styles.historyTitle, { color: colors.text }]}>Past Entries</Text>
-            {entries.slice(todayEntry ? 1 : 0).map((entry) => (
+            {entries.map((entry) => (
               <Pressable
                 key={entry.id}
                 style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}
@@ -277,7 +264,7 @@ export default function JournalScreen() {
               >
                 <View style={styles.entryCardHeader}>
                   <Text style={[styles.entryDate, { color: colors.textTertiary }]}>
-                    {new Date(entry.entry_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    {formatEntryDate(entry)}
                   </Text>
                   <View style={styles.entryCardRight}>
                     {entry.ai_summary && (
@@ -303,9 +290,9 @@ export default function JournalScreen() {
         )}
       </ScrollView>
 
-      {!isWriting && todayEntry && (
-        <Pressable style={[styles.fab, { backgroundColor: colors.primary }]} onPress={() => openEntry(todayEntry)}>
-          <Feather name="edit-2" size={20} color={colors.textInverse} />
+      {!isWriting && (
+        <Pressable style={[styles.fab, { backgroundColor: colors.primary }]} onPress={() => setIsWriting(true)}>
+          <Feather name="plus" size={22} color={colors.textInverse} />
         </Pressable>
       )}
 
@@ -505,19 +492,7 @@ export default function JournalScreen() {
                 </View>
               ) : null}
 
-              {/* Re-generate button for entries that already have insights */}
-              {!isEditMode && selectedEntry?.ai_summary && (
-                <Pressable
-                  style={[styles.regenBtn, { borderColor: colors.borderLight }, entryInsightLoading && styles.disabled]}
-                  onPress={generateEntryInsight}
-                  disabled={entryInsightLoading}
-                >
-                  <Feather name="refresh-cw" size={12} color={colors.textTertiary} />
-                  <Text style={[styles.regenBtnText, { color: colors.textTertiary }]}>
-                    {entryInsightLoading ? 'Regenerating...' : 'Regenerate Insight'}
-                  </Text>
-                </Pressable>
-              )}
+              {/* Re-generate button removed — only initial generation is allowed */}
             </ScrollView>
           </View>
         </View>

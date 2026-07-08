@@ -346,8 +346,20 @@ export default function TodayScreen() {
 
       const result = isRefresh ? await refreshDailyGoals(aiParams) : await generateDailyGoals(aiParams);
 
+      // Guard: if goals were already inserted by a parallel call, don't duplicate
+      if (!isRefresh) {
+        const { data: existingToday } = await supabase.from('goals').select('id').eq('goal_date', today);
+        if (existingToday && existingToday.length > 0) {
+          const { data: freshGoals } = await supabase.from('goals').select('*').eq('goal_date', today).order('created_at');
+          setGoals(freshGoals || []);
+          return;
+        }
+      }
+
+      const goalCount = profile?.daily_goal_limit || 3;
+
       if (result && result.daily_goals && result.daily_goals.length > 0) {
-        const inserts = result.daily_goals.map((g) => ({
+        const inserts = result.daily_goals.slice(0, goalCount).map((g) => ({
           title: g.text,
           description: '',
           goal_date: today,
@@ -360,7 +372,7 @@ export default function TodayScreen() {
         if (result.coach_note) setCoachNote(result.coach_note);
         if (result.insight) setAiInsight(result.insight);
       } else {
-        const fallbackGoals = categories.slice(0, profile?.daily_goal_limit || 3).map((cat, i) => ({
+        const fallbackGoals = categories.slice(0, goalCount).map((cat, i) => ({
           title: `Focused time on: ${cat.name}`,
           description: cat.growth_description || `Build your ${cat.name} practice today`,
           goal_date: today,
