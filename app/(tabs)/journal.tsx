@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, RefreshControl, Modal, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, RefreshControl, Modal, ActivityIndicator, Alert, useWindowDimensions, Platform } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { supabase } from '@/lib/supabase';
@@ -27,6 +27,7 @@ const PROMPTS = [
 export default function JournalScreen() {
   const { user, profile } = useAuth();
   const { colors } = useTheme();
+  const { height } = useWindowDimensions();
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [content, setContent] = useState('');
   const [isWriting, setIsWriting] = useState(false);
@@ -313,10 +314,11 @@ export default function JournalScreen() {
         visible={insightVisible}
         transparent
         animationType="slide"
+        statusBarTranslucent
         onRequestClose={() => !insightLoading && setInsightVisible(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalSheet, { backgroundColor: colors.surface }]}>
+          <View style={[styles.modalSheet, { backgroundColor: colors.surface, height: height * 0.75 }]}>
             <View style={[styles.modalHandle, { backgroundColor: colors.borderLight }]} />
 
             <View style={styles.modalHeader}>
@@ -383,10 +385,11 @@ export default function JournalScreen() {
         visible={entryModalVisible}
         transparent
         animationType="slide"
+        statusBarTranslucent
         onRequestClose={() => { setEntryModalVisible(false); setIsEditMode(false); }}
       >
         <View style={styles.modalBackdrop}>
-          <View style={[styles.entryModalSheet, { backgroundColor: colors.surface }]}>
+          <View style={[styles.entryModalSheet, { backgroundColor: colors.surface, height: height * 0.88 }]}>
             <View style={[styles.modalHandle, { backgroundColor: colors.borderLight }]} />
 
             {/* Entry modal header */}
@@ -587,8 +590,7 @@ const styles = StyleSheet.create({
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalSheet: {
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 40,
-    maxHeight: '85%',
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: Platform.OS === 'ios' ? 34 : 20,
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 20,
   },
   modalHandle: {
@@ -601,7 +603,7 @@ const styles = StyleSheet.create({
   loadingText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm },
   errorBlock: { alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.xl },
   errorText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, textAlign: 'center', lineHeight: 20 },
-  insightScroll: { maxHeight: 340, marginBottom: Spacing.md },
+  insightScroll: { flex: 1, marginBottom: Spacing.md },
   insightSection: { paddingVertical: Spacing.md, borderBottomWidth: 1 },
   insightSectionLabel: { fontFamily: 'Inter-Bold', fontSize: 10, letterSpacing: 1, marginBottom: 6 },
   insightSectionText: { fontFamily: 'Inter-Regular', fontSize: FontSize.md, lineHeight: 24 },
@@ -614,8 +616,7 @@ const styles = StyleSheet.create({
   // Past-entry detail modal
   entryModalSheet: {
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: 40,
-    maxHeight: '90%',
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: Platform.OS === 'ios' ? 34 : 20,
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 20,
   },
   entryModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.lg },

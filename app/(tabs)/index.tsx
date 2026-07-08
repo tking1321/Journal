@@ -488,13 +488,30 @@ export default function TodayScreen() {
   async function handleSaveGoal() {
     if (!selectedGoal || savingGoal || goalSaved) return;
     setSavingGoal(true);
-    await supabase.from('saved_goals').insert({
+
+    const note = goalComment.trim();
+
+    // Persist note to goals table if changed
+    if (note && note !== (selectedGoal.user_note || '')) {
+      await supabase.from('goals').update({ user_note: note }).eq('id', selectedGoal.id);
+      const updated = { ...selectedGoal, user_note: note };
+      setSelectedGoal(updated);
+      setGoals((prev) => prev.map((g) => g.id === selectedGoal.id ? updated : g));
+    }
+
+    const { data: savedRow } = await supabase.from('saved_goals').insert({
       original_goal_id: selectedGoal.id,
       title: selectedGoal.title,
       difficulty: selectedGoal.difficulty,
       xp_value: selectedGoal.xp_value,
       goal_date: selectedGoal.goal_date,
-    });
+    }).select().maybeSingle();
+
+    // Copy note as a comment on the saved goal
+    if (savedRow && note) {
+      await supabase.from('goal_comments').insert({ saved_goal_id: savedRow.id, text: note });
+    }
+
     setGoalSaved(true);
     setSavingGoal(false);
   }

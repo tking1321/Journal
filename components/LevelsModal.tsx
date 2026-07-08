@@ -1,4 +1,4 @@
-import { Modal, View, Text, StyleSheet, Pressable, ScrollView, Platform } from 'react-native';
+import { Modal, View, Text, StyleSheet, Pressable, ScrollView, Platform, useWindowDimensions } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { LEVEL_ICONS, Spacing, BorderRadius, FontSize } from '@/lib/constants';
@@ -33,25 +33,35 @@ const TIER_LABELS: Record<number, string> = {
 };
 
 export default function LevelsModal({ visible, currentLevel, onClose }: LevelsModalProps) {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
+  const { height } = useWindowDimensions();
+  const sheetHeight = height * 0.85;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.borderLight }]}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={styles.overlay}>
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={onClose} />
+        <View style={[styles.sheet, { backgroundColor: colors.background, height: sheetHeight }]}>
+          {/* Handle */}
+          <View style={[styles.handle, { backgroundColor: colors.borderLight }]} />
+
           {/* Header */}
           <View style={[styles.header, { borderBottomColor: colors.borderLight }]}>
             <Text style={[styles.title, { color: colors.text }]}>Level System</Text>
-            <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
+            <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
               <Feather name="x" size={20} color={colors.textSecondary} />
             </Pressable>
           </View>
 
           <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
           >
             {LEVEL_ICONS.map((entry, idx) => {
               const level = idx + 1;
@@ -69,7 +79,7 @@ export default function LevelsModal({ visible, currentLevel, onClose }: LevelsMo
                       </Text>
                     </View>
                   )}
-                  <Pressable
+                  <View
                     style={[
                       styles.row,
                       { borderBottomColor: colors.borderLight },
@@ -91,11 +101,11 @@ export default function LevelsModal({ visible, currentLevel, onClose }: LevelsMo
                       </View>
                     )}
                     <View style={[styles.colorSwatch, { backgroundColor: entry.color }]} />
-                  </Pressable>
+                  </View>
                 </View>
               );
             })}
-            <View style={styles.bottomPad} />
+            <View style={{ height: Platform.OS === 'ios' ? 34 : 20 }} />
           </ScrollView>
         </View>
       </View>
@@ -104,17 +114,19 @@ export default function LevelsModal({ visible, currentLevel, onClose }: LevelsMo
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
+  overlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   sheet: {
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    maxHeight: '85%',
+    overflow: 'hidden',
+  },
+  handle: {
+    width: 36, height: 4, borderRadius: 2, alignSelf: 'center',
+    marginTop: 10, marginBottom: 2,
   },
   header: {
     flexDirection: 'row',
@@ -122,7 +134,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   title: {
     fontFamily: 'Inter-Bold',
@@ -130,9 +142,6 @@ const styles = StyleSheet.create({
   },
   closeBtn: {
     padding: 4,
-  },
-  scroll: {
-    flex: 1,
   },
   scrollContent: {
     paddingTop: Spacing.xs,
@@ -145,9 +154,7 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   tierDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 6, height: 6, borderRadius: 3,
   },
   tierLabel: {
     fontFamily: 'Inter-SemiBold',
@@ -169,12 +176,8 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   iconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 30, height: 30, borderRadius: BorderRadius.sm, borderWidth: 1,
+    justifyContent: 'center', alignItems: 'center',
   },
   levelNum: {
     fontFamily: 'Inter-Bold',
@@ -188,21 +191,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   currentBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: BorderRadius.sm,
   },
   currentText: {
-    fontFamily: 'Inter-Bold',
-    fontSize: 9,
-    letterSpacing: 0.8,
+    fontFamily: 'Inter-Bold', fontSize: 9, letterSpacing: 0.8,
   },
   colorSwatch: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  bottomPad: {
-    height: Platform.OS === 'ios' ? 34 : 16,
+    width: 12, height: 12, borderRadius: 6,
   },
 });

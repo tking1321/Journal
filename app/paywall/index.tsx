@@ -1,9 +1,9 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Platform, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import { usePurchases } from '@/contexts/PurchasesContext';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState } from 'react';
 
 const BENEFITS = [
   'Personalized daily goals from your focus areas',
@@ -18,18 +18,19 @@ const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 export default function PaywallIntroScreen() {
   const router = useRouter();
   const { presentPaywall } = usePurchases();
-  const { profile } = useAuth();
-  const hasUsedTrial = profile?.has_used_free_trial ?? false;
+  const [loading, setLoading] = useState(false);
 
-  async function handleChoosePlan() {
-    if (isNative) {
+  async function handleSubscribe() {
+    if (!isNative || loading) return;
+    setLoading(true);
+    try {
       const purchased = await presentPaywall();
       if (purchased) {
         router.replace('/(tabs)');
-        return;
       }
+    } finally {
+      setLoading(false);
     }
-    router.push('/paywall/plans');
   }
 
   return (
@@ -39,11 +40,9 @@ export default function PaywallIntroScreen() {
           <Feather name="trending-up" size={28} color={Colors.textInverse} />
         </View>
 
-        <Text style={styles.title}>{hasUsedTrial ? 'Unlock Diverge.\nChoose a plan.' : 'Start free.\nSee your growth in 7 days.'}</Text>
+        <Text style={styles.title}>{'Start free.\nSee your growth in 7 days.'}</Text>
         <Text style={styles.subtitle}>
-          {hasUsedTrial
-            ? 'Your free trial has been used. Choose a plan to continue your journey.'
-            : 'No charge today. Cancel before day 8 and you owe nothing.'}
+          {'No charge today. Cancel before day 8 and you owe nothing.'}
         </Text>
 
         <View style={styles.benefitsList}>
@@ -56,17 +55,31 @@ export default function PaywallIntroScreen() {
             </View>
           ))}
         </View>
+
+        {!isNative && (
+          <View style={styles.webNotice}>
+            <Feather name="smartphone" size={18} color={Colors.textSecondary} />
+            <Text style={styles.webNoticeText}>
+              Subscriptions are available on iOS and Android only. Download the app to get started.
+            </Text>
+          </View>
+        )}
       </ScrollView>
 
-      <View style={styles.footer}>
-        <Pressable style={styles.ctaButton} onPress={handleChoosePlan}>
-          <Text style={styles.ctaText}>Choose Your Plan</Text>
-          <Feather name="arrow-right" size={16} color={Colors.textInverse} />
-        </Pressable>
-        {!hasUsedTrial && (
+      {isNative && (
+        <View style={styles.footer}>
+          <Pressable style={[styles.ctaButton, loading && { opacity: 0.6 }]} onPress={handleSubscribe} disabled={loading}>
+            {loading
+              ? <ActivityIndicator size="small" color={Colors.textInverse} />
+              : <>
+                  <Text style={styles.ctaText}>Start Free Trial</Text>
+                  <Feather name="arrow-right" size={16} color={Colors.textInverse} />
+                </>
+            }
+          </Pressable>
           <Text style={styles.footnote}>7-day free trial. Cancel anytime. No commitment.</Text>
-        )}
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -88,6 +101,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', flexShrink: 0,
   },
   benefitText: { fontFamily: 'Inter-Regular', fontSize: FontSize.md, color: Colors.text, flex: 1, lineHeight: 22 },
+  webNotice: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    marginTop: Spacing.xxl, padding: Spacing.md,
+    backgroundColor: Colors.surfaceElevated, borderRadius: BorderRadius.md,
+    borderWidth: 1, borderColor: Colors.borderLight,
+  },
+  webNoticeText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20, flex: 1 },
   footer: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, paddingBottom: 36, gap: Spacing.sm },
   ctaButton: {
     backgroundColor: Colors.primary, paddingVertical: 16, borderRadius: BorderRadius.md,
