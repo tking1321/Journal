@@ -1,0 +1,1 @@
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS is_regenerated boolean NOT NULL DEFAULT false;

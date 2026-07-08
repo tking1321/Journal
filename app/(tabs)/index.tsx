@@ -22,6 +22,7 @@ interface Goal {
   difficulty: string;
   xp_value: number;
   user_note: string | null;
+  is_regenerated: boolean;
 }
 
 interface Category {
@@ -600,6 +601,7 @@ export default function TodayScreen() {
         category_id: categories.find((c) => c.name === g.categoryName)?.id || null,
         difficulty: g.difficulty || 'easy',
         xp_value: g.xp || 5,
+        is_regenerated: true,
       }).select().maybeSingle();
       if (newGoal) setGoals((prev) => [...prev, newGoal]);
     }
@@ -630,8 +632,6 @@ export default function TodayScreen() {
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const xpProgressPercent = xpNeeded > 0 ? Math.min(1, currentXpInLevel / xpNeeded) : 0;
   const diffBg = isDark ? DIFFICULTY_BG_DARK : DIFFICULTY_BG_LIGHT;
-  const alreadyRefreshedToday = profile?.last_goal_refresh_date === today;
-
   return (
     <View style={[styles.outerContainer, { backgroundColor: colors.background }]}>
       <ScrollView
@@ -732,26 +732,11 @@ export default function TodayScreen() {
           </View>
         ) : null}
 
-        {/* Goals header */}
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Daily Goals</Text>
-          <View style={styles.sectionHeaderRight}>
-            {goals.length > 0 && (
-              <Text style={[styles.progressText, { color: colors.textTertiary }]}>{completedCount}/{goals.length} done</Text>
-            )}
-            {goals.length > 0 && !alreadyRefreshedToday && (
-              <Pressable
-                style={[styles.refreshButton, { borderColor: colors.borderLight }, generating && styles.buttonDisabled]}
-                onPress={() => handleGenerateGoals(true)}
-                disabled={generating}
-              >
-                <Feather name="refresh-cw" size={12} color={generating ? colors.textTertiary : colors.textSecondary} />
-                <Text style={[styles.refreshButtonText, { color: generating ? colors.textTertiary : colors.textSecondary }]}>
-                  {generating ? 'Refreshing...' : 'Refresh all'}
-                </Text>
-              </Pressable>
-            )}
-          </View>
+          {goals.length > 0 && (
+            <Text style={[styles.progressText, { color: colors.textTertiary }]}>{completedCount}/{goals.length} done</Text>
+          )}
         </View>
 
         {/* Goals content */}
@@ -891,20 +876,22 @@ export default function TodayScreen() {
 
             {/* Actions */}
             <View style={styles.goalModalActions}>
-              <Pressable
-                style={[styles.regenBtn, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }, goalRegenerating && styles.buttonDisabled]}
-                onPress={regenerateSingleGoal}
-                disabled={goalRegenerating}
-              >
-                {goalRegenerating ? (
-                  <ActivityIndicator size="small" color={colors.textSecondary} />
-                ) : (
-                  <Feather name="refresh-cw" size={14} color={colors.textSecondary} />
-                )}
-                <Text style={[styles.regenBtnText, { color: colors.textSecondary }]}>
-                  {goalRegenerating ? 'Regenerating...' : 'New Goal'}
-                </Text>
-              </Pressable>
+              {!selectedGoal?.is_regenerated && (
+                <Pressable
+                  style={[styles.regenBtn, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderLight }, goalRegenerating && styles.buttonDisabled]}
+                  onPress={regenerateSingleGoal}
+                  disabled={goalRegenerating}
+                >
+                  {goalRegenerating ? (
+                    <ActivityIndicator size="small" color={colors.textSecondary} />
+                  ) : (
+                    <Feather name="refresh-cw" size={14} color={colors.textSecondary} />
+                  )}
+                  <Text style={[styles.regenBtnText, { color: colors.textSecondary }]}>
+                    {goalRegenerating ? 'Regenerating...' : 'New Goal'}
+                  </Text>
+                </Pressable>
+              )}
 
               <Pressable
                 style={[
@@ -1008,16 +995,8 @@ const styles = StyleSheet.create({
   insightText: { fontFamily: 'Inter-Regular', fontSize: FontSize.sm, lineHeight: 20, fontStyle: 'italic' },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
-  sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   sectionTitle: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md },
   progressText: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs },
-
-  refreshButton: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    borderWidth: 1, borderRadius: BorderRadius.sm,
-    paddingHorizontal: Spacing.sm, paddingVertical: 3,
-  },
-  refreshButtonText: { fontFamily: 'Inter-Medium', fontSize: FontSize.xs },
   buttonDisabled: { opacity: 0.45 },
 
   goalsList: { gap: Spacing.sm },
