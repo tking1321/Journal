@@ -112,7 +112,7 @@ export default function ProfileScreen() {
         </View>
         <View style={[styles.levelBadge, { backgroundColor: levelIcon.color + '18', borderColor: levelIcon.color + '40' }]}>
           <Feather name={levelIcon.icon as any} size={13} color={levelIcon.color} />
-          <Text style={[styles.levelBadgeText, { color: levelIcon.color }]}>Lv {userLevel}</Text>
+          <Text style={[styles.levelBadgeText, { color: levelIcon.color }]}>{userLevel >= 100 ? 'Max Level' : `Lv ${userLevel}`}</Text>
         </View>
       </View>
 

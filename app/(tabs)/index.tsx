@@ -630,15 +630,17 @@ export default function TodayScreen() {
                   </View>
                 </View>
                 <Text style={[styles.xpLabel, { color: colors.textSecondary }]}>
-                  {currentXpInLevel} / {xpNeeded} XP to next level
+                  {userLevel >= 100 ? 'Max Level' : `${currentXpInLevel} / ${xpNeeded} XP to next level`}
                 </Text>
               </View>
             </View>
             <Feather name="chevron-right" size={14} color={colors.textTertiary} />
           </View>
-          <View style={[styles.xpBarTrack, { backgroundColor: colors.borderLight }]}>
-            <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any, backgroundColor: levelIcon.color }]} />
-          </View>
+          {userLevel < 100 && (
+            <View style={[styles.xpBarTrack, { backgroundColor: colors.borderLight }]}>
+              <View style={[styles.xpBarFill, { width: `${xpProgressPercent * 100}%` as any, backgroundColor: levelIcon.color }]} />
+            </View>
+          )}
           <Text style={[styles.totalXpText, { color: colors.textTertiary }]}>Total XP: {totalXp}</Text>
         </Pressable>
 
