@@ -1,0 +1,79 @@
+workflows:
+  ios-testflight:
+    name: iOS – Build & Upload to TestFlight
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+
+    environment:
+      node: 20.17.0
+      xcode: 26.0           # iOS 26 SDK
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: $BUNDLE_ID
+      vars:
+        BUNDLE_ID: com.divergeapp.diverge
+        XCODE_WORKSPACE: ios/diverge.xcworkspace
+        XCODE_SCHEME: diverge
+      # Store these in Codemagic UI → Teams → Environment variables:
+      #   APP_STORE_CONNECT_ISSUER_ID
+      #   APP_STORE_CONNECT_KEY_IDENTIFIER
+      #   APP_STORE_CONNECT_PRIVATE_KEY   (contents of the .p8 file)
+      #   APPLE_TEAM_ID
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: Install JS dependencies
+        script: npm ci
+
+      - name: Set version and build number from app.json
+        script: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          BUILD=$(node -p "require('./app.json').expo.ios.buildNumber")
+          echo "Building v${VERSION} (${BUILD})"
+          # agvtool runs after prebuild generates the Xcode project
+          export APP_VERSION="$VERSION"
+          export APP_BUILD="$BUILD"
+
+      - name: Generate native iOS project
+        script: npx expo prebuild --platform ios --clean
+
+      - name: Set Xcode version and build number
+        script: |
+          cd ios
+          agvtool new-marketing-version "$APP_VERSION"
+          agvtool new-version -all "$APP_BUILD"
+
+      - name: Install CocoaPods
+        script: cd ios && pod install --repo-update
+
+      - name: Build and archive IPA
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        beta_groups:
+          - Internal Testers
+      email:
+        recipients:
+          - $CM_SUBMITTER_EMAIL
+        notify:
+          success: true
+          failure: true

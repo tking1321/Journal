@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, Switch, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, Switch, Platform, Linking } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePurchases } from '@/contexts/PurchasesContext';
 import { supabase } from '@/lib/supabase';
-import { Spacing, BorderRadius, FontSize, getLevelIcon } from '@/lib/constants';
+import { Spacing, BorderRadius, FontSize, getLevelIcon, LEGAL_URLS } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
@@ -257,6 +257,40 @@ export default function ProfileScreen() {
               thumbColor={colors.surface}
             />
           </View>
+        </View>
+      </View>
+
+      {/* Legal */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Legal</Text>
+        <View style={[styles.settingsList, { backgroundColor: colors.surface, borderColor: colors.borderLight }]}>
+          <Pressable style={styles.settingRow} onPress={() => Linking.openURL(LEGAL_URLS.privacyPolicy)}>
+            <View style={styles.settingLeft}>
+              <Feather name="shield" size={15} color={colors.textSecondary} />
+              <Text style={[styles.settingLabel, { color: colors.text }]}>Privacy Policy</Text>
+            </View>
+            <Feather name="external-link" size={14} color={colors.textTertiary} />
+          </Pressable>
+          <Pressable
+            style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: colors.borderLight }]}
+            onPress={() => Linking.openURL(LEGAL_URLS.termsOfService)}
+          >
+            <View style={styles.settingLeft}>
+              <Feather name="file-text" size={15} color={colors.textSecondary} />
+              <Text style={[styles.settingLabel, { color: colors.text }]}>Terms of Service</Text>
+            </View>
+            <Feather name="external-link" size={14} color={colors.textTertiary} />
+          </Pressable>
+          <Pressable
+            style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: colors.borderLight }]}
+            onPress={() => Linking.openURL(LEGAL_URLS.subscriptionTerms)}
+          >
+            <View style={styles.settingLeft}>
+              <Feather name="info" size={15} color={colors.textSecondary} />
+              <Text style={[styles.settingLabel, { color: colors.text }]}>Subscription Terms</Text>
+            </View>
+            <Feather name="external-link" size={14} color={colors.textTertiary} />
+          </Pressable>
         </View>
       </View>
 

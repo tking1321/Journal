@@ -218,3 +218,9 @@ export function getLevelIcon(level: number): LevelIcon {
   const idx = Math.min(Math.max(level - 1, 0), LEVEL_ICONS.length - 1);
   return LEVEL_ICONS[idx];
 }
+
+export const LEGAL_URLS = {
+  privacyPolicy: 'https://divergeapp.com/privacy',
+  termsOfService: 'https://divergeapp.com/terms',
+  subscriptionTerms: 'https://divergeapp.com/subscription-terms',
+};

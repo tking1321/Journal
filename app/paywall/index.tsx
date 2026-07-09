@@ -1,6 +1,6 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Platform, ActivityIndicator, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Colors, Spacing, BorderRadius, FontSize } from '@/lib/constants';
+import { Colors, Spacing, BorderRadius, FontSize, LEGAL_URLS } from '@/lib/constants';
 import { Feather } from '@expo/vector-icons';
 import { usePurchases } from '@/contexts/PurchasesContext';
 import { useState } from 'react';
@@ -78,6 +78,19 @@ export default function PaywallIntroScreen() {
             }
           </Pressable>
           <Text style={styles.footnote}>7-day free trial. Cancel anytime. No commitment.</Text>
+          <View style={styles.legalRow}>
+            <Pressable onPress={() => Linking.openURL(LEGAL_URLS.privacyPolicy)}>
+              <Text style={styles.legalLink}>Privacy Policy</Text>
+            </Pressable>
+            <Text style={styles.legalSep}>·</Text>
+            <Pressable onPress={() => Linking.openURL(LEGAL_URLS.termsOfService)}>
+              <Text style={styles.legalLink}>Terms of Service</Text>
+            </Pressable>
+            <Text style={styles.legalSep}>·</Text>
+            <Pressable onPress={() => Linking.openURL(LEGAL_URLS.subscriptionTerms)}>
+              <Text style={styles.legalLink}>Subscription Terms</Text>
+            </Pressable>
+          </View>
         </View>
       )}
     </View>
@@ -115,4 +128,7 @@ const styles = StyleSheet.create({
   },
   ctaText: { fontFamily: 'Inter-SemiBold', fontSize: FontSize.md, color: Colors.textInverse },
   footnote: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, textAlign: 'center' },
+  legalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 4, marginTop: 4 },
+  legalLink: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary, textDecorationLine: 'underline' },
+  legalSep: { fontFamily: 'Inter-Regular', fontSize: FontSize.xs, color: Colors.textTertiary },
 });
